@@ -1,0 +1,5 @@
+pymongo
+requests
+openai
+streamlit
+newspaper3k
