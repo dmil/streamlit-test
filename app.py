@@ -28,15 +28,6 @@ def main():
         menu_items={"About": "This is a draft version of the Campus Announcements Tracker."}
     )
     
-    # Add proper metadata for link sharing
-    st.markdown("""
-        <!-- Open Graph / Facebook -->
-        <meta property="og:type" content="website">
-        <meta property="og:url" content="https://campusdata.onrender.com/">
-        <meta property="og:title" content="Campus Announcements Tracker [DRAFT - NOT FOR PUB]">
-        <meta property="og:description" content="Track announcements from university provost and president offices of universities.">
-    """, unsafe_allow_html=True)
-    
     st.title("Campus Announcements [DRAFT]")
     st.markdown("Announcements from provost and president's offices of select universities.")
     db = get_db()
