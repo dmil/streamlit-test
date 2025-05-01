@@ -91,16 +91,9 @@ def main():
         """
         st.markdown(announcement_html, unsafe_allow_html=True)
 
-                # LLM Response Section
+        # LLM Response Section
         if ann.get("llm_response"):
             llm_response = ann.get("llm_response")
-            # st.markdown("#### LLM Response")
-            # st.markdown(
-            #     f"""
-            #     <small><b>Question:</b> Is this an instance of the university either (1) supporting or (2) opposing federal government or federal administration actions?</small>
-            #     """,
-            #     unsafe_allow_html=True,
-            # )
             if llm_response.get("related"):
                 st.markdown(f"🤖 **LLM Says:** {llm_response['reason']}")
             
