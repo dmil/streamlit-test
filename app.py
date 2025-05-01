@@ -21,15 +21,20 @@ def get_db():
 def main():
     # Set page config - MUST be the first Streamlit command
     st.set_page_config(
-        page_title="Campus Announcements Tracker [DRAFT, NOT FOR PUB]",
+        page_title="Campus Announcements Tracker [DRAFT]",
         page_icon="🎓",
         layout="centered",
-        initial_sidebar_state="expanded"
+        initial_sidebar_state="expanded",
+        menu_items={"About": "This is a draft version of the Campus Announcements Tracker."}
     )
     
-    # Add meta description for link sharing
+    # Add proper metadata for link sharing
     st.markdown("""
-        <meta name="description" content="[DRAFT, NOT FOR PUB]Track announcements from university provost and president offices.">
+        <!-- Open Graph / Facebook -->
+        <meta property="og:type" content="website">
+        <meta property="og:url" content="https://campusdata.onrender.com/">
+        <meta property="og:title" content="Campus Announcements Tracker [DRAFT - NOT FOR PUB]">
+        <meta property="og:description" content="Track announcements from university provost and president offices of universities.">
     """, unsafe_allow_html=True)
     
     st.title("Campus Announcements [DRAFT]")
