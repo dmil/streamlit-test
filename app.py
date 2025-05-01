@@ -19,7 +19,8 @@ def get_db():
 
 
 def main():
-    st.title("Provost Announcements [DRAFT]")
+    st.title("Campus Announcements [DRAFT]")
+    st.markdown("Announcements from provost and president's offices of select universities.")
     db = get_db()
 
     # Fetch all unique schools from the database
@@ -47,13 +48,17 @@ def main():
     if show_only_llm_related:
         query["llm_response.related"] = True
     
-    # Add date filter for announcements after Nov 5, 2025
-    query["date"] = {"$gte": datetime(2024, 11, 5)}
+    # Add date filter for announcements after Jan 1, 2025
+    query["date"] = {"$gte": datetime(2025, 1, 1)}
 
     # Fetch announcements based on the query
     cursor = db.announcements.find(query, {"_id": 0}).sort("date", -1)
+    announcements = list(cursor)  # Convert cursor to a list to get its length
+    num_announcements = len(announcements)
 
-    for ann in cursor:
+    st.write(f"Number of announcements: **{num_announcements}** (from Jan 1, 2025 onwards)")
+
+    for ann in announcements:
         title = ann.get("title", "No Title")
 
         # Format the date
