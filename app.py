@@ -29,7 +29,7 @@ def main():
     )
     
     st.title("Campus Announcements [DRAFT]")
-    st.markdown("Announcements from provost and president's offices of select universities.")
+    st.markdown("Announcements from the provosts' and presidents' offices at select universities.")
     db = get_db()
 
     # Fetch all unique schools from the database
