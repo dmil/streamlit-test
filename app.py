@@ -14,11 +14,7 @@ DB_NAME = os.environ.get("DB_NAME", "campus_data")
 
 # Connect to MongoDB
 def get_db():
-    client = client = MongoClient(
-        MONGO_URI,
-        ssl=True,
-        ssl_cert_reqs='CERT_NONE'  # Try this only if other methods fail
-    )
+    client = MongoClient(MONGO_URI)
     return client[DB_NAME]
 
 
