@@ -19,6 +19,19 @@ def get_db():
 
 
 def main():
+    # Set page config - MUST be the first Streamlit command
+    st.set_page_config(
+        page_title="Campus Announcements Tracker [DRAFT, NOT FOR PUB]",
+        page_icon="🎓",
+        layout="centered",
+        initial_sidebar_state="expanded"
+    )
+    
+    # Add meta description for link sharing
+    st.markdown("""
+        <meta name="description" content="[DRAFT, NOT FOR PUB]Track announcements from university provost and president offices.">
+    """, unsafe_allow_html=True)
+    
     st.title("Campus Announcements [DRAFT]")
     st.markdown("Announcements from provost and president's offices of select universities.")
     db = get_db()
