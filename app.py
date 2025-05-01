@@ -19,9 +19,7 @@ def get_db():
 
 
 def main():
-    st.title("Provost Announcements")
-    st.markdown("A simple list of scraped announcements with their source URLs.")
-
+    st.title("Provost Announcements [DRAFT]")
     db = get_db()
 
     # Fetch all unique schools from the database
@@ -37,7 +35,9 @@ def main():
     if selected_school != "All":
         selected_school_code = next((school["code"] for school in schools if school["name"] == selected_school), None)
 
-    show_only_llm_related = st.checkbox("LLM Identified as Govt. Related", help="Question: Is this an instance of the university either (1) supporting or (2) opposing federal government or federal administration actions?")
+    st.markdown('>_Click the checkbox to see only items pertaining to federal government or federal administration actions. Hover on the question mark to see the prompt used. Please note that this is an unedited **first draft** proof-of-concept. Entries may be missing or incorrect._', unsafe_allow_html=True)
+
+    show_only_llm_related = st.checkbox("👈 LLM Identified as Govt. Related", help="LLM Prompt: Is this an instance of the university either (1) supporting or (2) opposing federal government or federal administration actions?")
 
     # Build the query based on the selected school
     query = {}
@@ -102,7 +102,7 @@ def main():
             #     unsafe_allow_html=True,
             # )
             if llm_response.get("related"):
-                st.markdown(f"🤖**LLM Says:** {llm_response['reason']}")
+                st.markdown(f"🤖 **LLM Says:** {llm_response['reason']}")
             
         st.markdown("<hr style=\"margin-top:0.5em;margin-bottom:0.5em;\">", unsafe_allow_html=True)
 
