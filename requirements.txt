@@ -3,3 +3,4 @@ requests
 openai
 streamlit
 newspaper3k
+python-dotenv
