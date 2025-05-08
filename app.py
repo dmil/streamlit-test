@@ -8,6 +8,11 @@ from datetime import datetime
 import streamlit as st
 from pymongo import MongoClient
 
+
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv(override=True)
+
 # Configuration
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME", "campus_data")
@@ -36,8 +41,10 @@ def main():
     schools_cursor = db.schools.find({}, {"_id": 0, "code": 1, "name": 1})
     schools = [{"code": school.get("code"), "name": school.get("name", school.get("code"))} for school in schools_cursor]
 
-    # Create a dropdown for school selection
-    school_options = ["All"] + [school["name"] for school in schools]
+    # Create a dropdown for school selection with alphabetically sorted options
+    school_names = [school["name"] for school in schools]
+    school_names.sort()  # Sort school names alphabetically
+    school_options = ["All"] + school_names
     selected_school = st.selectbox("Filter by School", school_options)
 
     # Map selected school name back to its code
