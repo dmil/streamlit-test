@@ -169,11 +169,11 @@ def main():
             if llm_response.get("protest_related", {}).get("related"):
                 categories_found.append(("🪧 Protest", llm_response["protest_related"]["reason"]))
 
-            if llm_response.get("government_supportive", {}).get("related"):
-                categories_found.append(("🤝 Government Supportive", llm_response["government_supportive"]["reason"]))
+            # if llm_response.get("government_supportive", {}).get("related"):
+            #     categories_found.append(("🤝 Government Supportive", llm_response["government_supportive"]["reason"]))
 
-            if llm_response.get("government_opposing", {}).get("related"):
-                categories_found.append(("✊ Government Opposing", llm_response["government_opposing"]["reason"]))
+            # if llm_response.get("government_opposing", {}).get("related"):
+            #     categories_found.append(("✊ Government Opposing", llm_response["government_opposing"]["reason"]))
 
             # Display all found categories
             for category, reason in categories_found:
