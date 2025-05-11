@@ -47,11 +47,11 @@ def main():
     school_options = ["All"] + school_names
     selected_school = st.selectbox("Filter by School", school_options)
 
-    st.markdown('>_Check any box to filter for items identified by our LLM as related to that category. Hover on each checkbox for more information about the criteria. Please note that this is an unedited **first draft** proof-of-concept. Classifications may be inaccurate._', unsafe_allow_html=True)
+    st.markdown('>_Check any box to filter for items identified by our LLM as related to that category. Hover on each checkbox for more information about the criteria._', unsafe_allow_html=True)
+    st.markdown('⚠️ Please note that this is an unedited **first draft** proof-of-concept. Classifications **WILL BE** inaccurate. ⚠️', unsafe_allow_html=True)
 
     # Create a columns layout for the checkboxes
     col1, col2 = st.columns(2)
-    col3, col4 = st.columns(2)
 
     llm_prompt = (
         "Analyze this university announcement and determine if it:\n"
@@ -65,16 +65,20 @@ def main():
     with col1:
         show_govt_related = st.checkbox("👨‍⚖️ Government Related", 
             help="LLM Prompt: Items where the university is supporting or opposing federal government or administration actions")
+        # show_govt_supportive = st.checkbox(
+        #     "🤝 Government Supportive",
+        #     help="Indicates if the university praises or emphasizes cooperation with the federal government."
+        # )
+        # show_govt_opposing = st.checkbox(
+        #     "✊ Government Opposing",
+        #     help="Indicates if the article opposes or criticizes federal government actions."
+        # )
+        show_lawsuit_related = st.checkbox("⚖️ Lawsuit Related", 
+            help="LLM Prompt: Items mentioning lawsuits or legal actions related to the university")        
         
     with col2:
-        show_lawsuit_related = st.checkbox("⚖️ Lawsuit Related", 
-            help="LLM Prompt: Items mentioning lawsuits or legal actions related to the university")
-    
-    with col3:
         show_funding_related = st.checkbox("💰 Funding Related", 
             help="LLM Prompt: Items discussing funding cuts or financial issues")
-
-    with col4:
         show_protest_related = st.checkbox("🪧 Protest Related", 
             help="LLM Prompt: Items mentioning campus protests or disruptions")
 
@@ -93,6 +97,10 @@ def main():
         filter_conditions.append({"llm_response.funding_related.related": True})
     if show_protest_related:
         filter_conditions.append({"llm_response.protest_related.related": True})
+    # if show_govt_supportive:
+    #     filter_conditions.append({"llm_response.government_supportive.related": True})
+    # if show_govt_opposing:
+    #     filter_conditions.append({"llm_response.government_opposing.related": True})
 
     # Combine filters with OR if any are selected
     if filter_conditions:
@@ -160,6 +168,12 @@ def main():
 
             if llm_response.get("protest_related", {}).get("related"):
                 categories_found.append(("🪧 Protest", llm_response["protest_related"]["reason"]))
+
+            if llm_response.get("government_supportive", {}).get("related"):
+                categories_found.append(("🤝 Government Supportive", llm_response["government_supportive"]["reason"]))
+
+            if llm_response.get("government_opposing", {}).get("related"):
+                categories_found.append(("✊ Government Opposing", llm_response["government_opposing"]["reason"]))
 
             # Display all found categories
             for category, reason in categories_found:
