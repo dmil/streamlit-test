@@ -38,8 +38,8 @@ def main():
     db = get_db()
 
     # Fetch all unique schools from the database
-    schools_cursor = db.schools.find({}, {"_id": 0, "code": 1, "name": 1})
-    schools = [{"code": school.get("code"), "name": school.get("name", school.get("code"))} for school in schools_cursor]
+    schools_cursor = db.schools.find({}, {"_id": 0, "name": 1})
+    schools = [{"name": school.get("name")} for school in schools_cursor]
 
     # Create a dropdown for school selection with alphabetically sorted options
     school_names = [school["name"] for school in schools]
@@ -47,19 +47,14 @@ def main():
     school_options = ["All"] + school_names
     selected_school = st.selectbox("Filter by School", school_options)
 
-    # Map selected school name back to its code
-    selected_school_code = None
-    if selected_school != "All":
-        selected_school_code = next((school["code"] for school in schools if school["name"] == selected_school), None)
-
     st.markdown('>_Click the checkbox to see only items pertaining to federal government or federal administration actions. Hover on the question mark to see the prompt used. Please note that this is an unedited **first draft** proof-of-concept. Entries may be missing or incorrect._', unsafe_allow_html=True)
 
     show_only_llm_related = st.checkbox("👈 LLM Identified as Govt. Related", help="LLM Prompt: Is this an instance of the university either (1) supporting or (2) opposing federal government or federal administration actions?")
 
     # Build the query based on the selected school
     query = {}
-    if selected_school_code:
-        query["school"] = selected_school_code
+    if selected_school != "All":
+        query["school"] = selected_school
 
     if show_only_llm_related:
         query["llm_response.related"] = True
@@ -84,16 +79,12 @@ def main():
         else:
             date_str = str(date_value)
 
-        # Resolve school display name and color
-        school_code = ann.get("school", "")
-        school_name = school_code
+        # Get school name and color
+        school_name = ann.get("school", "Unknown School")
         school_color = "#000000"  # Default to black if no color is found
-        school_doc = db.schools.find_one({"code": school_code}, {"name": 1, "color": 1})
-        if school_doc:
-            if school_doc.get("name"):
-                school_name = school_doc["name"]
-            if school_doc.get("color"):
-                school_color = school_doc["color"]
+        school_doc = db.schools.find_one({"name": school_name}, {"color": 1})
+        if school_doc and school_doc.get("color"):
+            school_color = school_doc["color"]
 
         # Announcement URL
         url = ann.get("url", "")
