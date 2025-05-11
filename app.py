@@ -47,18 +47,57 @@ def main():
     school_options = ["All"] + school_names
     selected_school = st.selectbox("Filter by School", school_options)
 
-    st.markdown('>_Click the checkbox to see only items pertaining to federal government or federal administration actions. Hover on the question mark to see the prompt used. Please note that this is an unedited **first draft** proof-of-concept. Entries may be missing or incorrect._', unsafe_allow_html=True)
+    st.markdown('>_Check any box to filter for items identified by our LLM as related to that category. Hover on each checkbox for more information about the criteria. Please note that this is an unedited **first draft** proof-of-concept. Classifications may be inaccurate._', unsafe_allow_html=True)
 
-    show_only_llm_related = st.checkbox("👈 LLM Identified as Govt. Related", help="LLM Prompt: Is this an instance of the university either (1) supporting or (2) opposing federal government or federal administration actions?")
+    # Create a columns layout for the checkboxes
+    col1, col2 = st.columns(2)
+    col3, col4 = st.columns(2)
+
+    llm_prompt = (
+        "Analyze this university announcement and determine if it:\n"
+        "1. Is related to the university responding to federal government or federal administration actions\n"
+        "2. Mentions a lawsuit or legal action\n"
+        "3. Discusses funding cuts or funding issues\n"
+        "4. Relates to campus protests or disruptions\n\n"
+        "For each category, provide whether it's related (true/false) and if true, a brief reason."
+    )
+
+    with col1:
+        show_govt_related = st.checkbox("👨‍⚖️ Government Related", 
+            help="LLM Prompt: Items where the university is supporting or opposing federal government or administration actions")
+        
+    with col2:
+        show_lawsuit_related = st.checkbox("⚖️ Lawsuit Related", 
+            help="LLM Prompt: Items mentioning lawsuits or legal actions related to the university")
+    
+    with col3:
+        show_funding_related = st.checkbox("💰 Funding Related", 
+            help="LLM Prompt: Items discussing funding cuts or financial issues")
+
+    with col4:
+        show_protest_related = st.checkbox("🪧 Protest Related", 
+            help="LLM Prompt: Items mentioning campus protests or disruptions")
 
     # Build the query based on the selected school
     query = {}
     if selected_school != "All":
         query["school"] = selected_school
 
-    if show_only_llm_related:
-        query["llm_response.related"] = True
-    
+    # Add filters based on selected categories
+    filter_conditions = []
+    if show_govt_related:
+        filter_conditions.append({"llm_response.government_related.related": True})
+    if show_lawsuit_related:
+        filter_conditions.append({"llm_response.lawsuit_related.related": True})
+    if show_funding_related:
+        filter_conditions.append({"llm_response.funding_related.related": True})
+    if show_protest_related:
+        filter_conditions.append({"llm_response.protest_related.related": True})
+
+    # Combine filters with OR if any are selected
+    if filter_conditions:
+        query["$or"] = filter_conditions
+
     # Add date filter for announcements after Jan 1, 2025
     query["date"] = {"$gte": datetime(2025, 1, 1)}
 
@@ -106,9 +145,26 @@ def main():
         # LLM Response Section
         if ann.get("llm_response"):
             llm_response = ann.get("llm_response")
-            if llm_response.get("related"):
-                st.markdown(f"🤖 **LLM Says:** {llm_response['reason']}")
-            
+
+            # Check each category and display if related
+            categories_found = []
+
+            if llm_response.get("government_related", {}).get("related"):
+                categories_found.append(("👨‍⚖️ Government", llm_response["government_related"]["reason"]))
+
+            if llm_response.get("lawsuit_related", {}).get("related"):
+                categories_found.append(("⚖️ Lawsuit", llm_response["lawsuit_related"]["reason"]))
+
+            if llm_response.get("funding_related", {}).get("related"):
+                categories_found.append(("💰 Funding", llm_response["funding_related"]["reason"]))
+
+            if llm_response.get("protest_related", {}).get("related"):
+                categories_found.append(("🪧 Protest", llm_response["protest_related"]["reason"]))
+
+            # Display all found categories
+            for category, reason in categories_found:
+                st.markdown(f"🤖 **LLM Says ({category}):** {reason}")
+
         st.markdown("<hr style=\"margin-top:0.5em;margin-bottom:0.5em;\">", unsafe_allow_html=True)
 
 if __name__ == "__main__":
