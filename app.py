@@ -7,6 +7,8 @@ import os
 from datetime import datetime
 import streamlit as st
 from pymongo import MongoClient
+import pandas as pd
+import io
 
 
 # Load environment variables from .env file
@@ -93,6 +95,17 @@ def display_announcements(db):
     num_announcements = len(announcements)
 
     st.write(f"Number of announcements: **{num_announcements}** (from Jan 1, 2025 onwards)")
+    
+    # Add download button for CSV
+    if announcements:
+        # Create a download button
+        csv = convert_to_csv(announcements, db)
+        st.download_button(
+            label="📥 Download data as CSV",
+            data=csv,
+            file_name="announcements_data.csv",
+            mime="text/csv",
+        )
 
     for ann in announcements:
         title = ann.get("title", "No Title")
@@ -152,6 +165,59 @@ def display_announcements(db):
                 st.markdown(f"🤖 **LLM Says ({category}):** {reason}")
 
         st.markdown("<hr style=\"margin-top:0.5em;margin-bottom:0.5em;\">", unsafe_allow_html=True)
+
+
+def convert_to_csv(announcements, db):
+    """Convert announcements data to CSV format, excluding content column."""
+    # Create a list to store processed announcements
+    processed_data = []
+    
+    for ann in announcements:
+        # Extract base data
+        processed_ann = {
+            "title": ann.get("title", ""),
+            "school": ann.get("school", ""),
+            "date": ann.get("date"),
+            "url": ann.get("url", ""),
+            # "base_url": ann.get("base_url", "")
+        }
+        
+        # Add LLM response fields if available
+        llm_response = ann.get("llm_response", {})
+        
+        # Add government related info
+        govt_data = llm_response.get("government_related", {})
+        processed_ann["govt_related"] = govt_data.get("related", False)
+        processed_ann["govt_reason"] = govt_data.get("reason", "") if govt_data.get("related") else ""
+        
+        # Add lawsuit related info
+        lawsuit_data = llm_response.get("lawsuit_related", {})
+        processed_ann["lawsuit_related"] = lawsuit_data.get("related", False)
+        processed_ann["lawsuit_reason"] = lawsuit_data.get("reason", "") if lawsuit_data.get("related") else ""
+        
+        # Add funding related info
+        funding_data = llm_response.get("funding_related", {})
+        processed_ann["funding_related"] = funding_data.get("related", False)
+        processed_ann["funding_reason"] = funding_data.get("reason", "") if funding_data.get("related") else ""
+        
+        # Add protest related info
+        protest_data = llm_response.get("protest_related", {})
+        processed_ann["protest_related"] = protest_data.get("related", False)
+        processed_ann["protest_reason"] = protest_data.get("reason", "") if protest_data.get("related") else ""
+        
+        processed_data.append(processed_ann)
+    
+    # Convert to pandas DataFrame and then to CSV
+    df = pd.DataFrame(processed_data)
+    
+    # Convert datetime objects to strings
+    if 'date' in df.columns:
+        df['date'] = df['date'].apply(lambda x: x.strftime('%Y-%m-%d') if isinstance(x, datetime) else str(x))
+    
+    # Convert to CSV
+    csv_buffer = io.StringIO()
+    df.to_csv(csv_buffer, index=False)
+    return csv_buffer.getvalue()
 
 
 def display_scraper_status(db):
