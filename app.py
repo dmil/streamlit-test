@@ -269,7 +269,13 @@ def display_scraper_status(db):
                 })
             
             # Display as a table
-            st.dataframe(data, use_container_width=True)
+            # st.table(pd.DataFrame(data).set_index('Name'))
+            # Display as a table
+            # st.table(data)
+            df = pd.DataFrame(data)
+            # # Extract filename from path
+            df['Path'] = df['Path'].apply(lambda x: x.split('/')[-1].split('.')[-1])
+            st.table(df.set_index('Path'))
 
 
 
