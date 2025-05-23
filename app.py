@@ -27,7 +27,6 @@ def get_db():
 
 def display_announcements(db):
     """Display the announcements view."""
-    st.markdown("Announcements from the provosts' and presidents' offices at select universities.")
     st.markdown('⚠️ Please note that this is an unedited **first draft** proof-of-concept. Classifications **WILL BE** inaccurate. ⚠️', unsafe_allow_html=True)
 
     # Fetch all unique schools from the database
@@ -290,7 +289,8 @@ def main():
     )
     
     st.title("Campus Announcements [DRAFT]")
-    
+    st.markdown("Announcements from the provosts' and presidents' offices at select universities.")
+
     db = get_db()
     
     # Create tabs for different views
