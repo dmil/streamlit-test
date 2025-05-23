@@ -65,6 +65,9 @@ def display_announcements(db):
         show_protest_related = st.checkbox("🪧 Protest Related", 
             help="LLM Prompt: Items mentioning campus protests or disruptions")
 
+    # Add a text search bar for content search
+    search_term = st.text_input("🔍 Search announcement content", value="", help="Enter keywords to search announcement content (case-insensitive)")
+
     # Build the query based on the selected school
     query = {}
     if selected_school != "All":
@@ -87,6 +90,10 @@ def display_announcements(db):
 
     # Add date filter for announcements after Jan 1, 2025
     query["date"] = {"$gte": datetime(2025, 1, 1)}
+
+    # Add content search filter if search_term is provided
+    if search_term.strip():
+        query["content"] = {"$regex": search_term, "$options": "i"}
 
     # Fetch announcements based on the query
     cursor = db.announcements.find(query, {"_id": 0}).sort("date", -1)
