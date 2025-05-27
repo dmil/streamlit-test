@@ -95,9 +95,9 @@ def display_announcements(db):
     if search_term.strip():
         query["content"] = {"$regex": search_term, "$options": "i"}
 
-    # Fetch announcements based on the query
+    # Fetch announcements for current page (remove pagination here)
     cursor = db.announcements.find(query, {"_id": 0}).sort("date", -1)
-    announcements = list(cursor)  # Convert cursor to a list to get its length
+    announcements = list(cursor)
     num_announcements = len(announcements)
 
     st.write(f"Number of announcements: **{num_announcements}** (from Jan 1, 2025 onwards)")
@@ -113,7 +113,19 @@ def display_announcements(db):
             mime="text/csv",
         )
 
-    for ann in announcements:
+    # --- Pagination logic ---
+    PAGE_SIZE = 10
+    total_pages = max((num_announcements - 1) // PAGE_SIZE + 1, 1)
+    if "ann_page" not in st.session_state:
+        st.session_state["ann_page"] = 0
+    # Clamp page number if needed
+    st.session_state["ann_page"] = min(st.session_state["ann_page"], total_pages - 1)
+    start_idx = st.session_state["ann_page"] * PAGE_SIZE
+    end_idx = start_idx + PAGE_SIZE
+    paged_announcements = announcements[start_idx:end_idx]
+
+    # Display announcements for current page
+    for ann in paged_announcements:
         title = ann.get("title", "No Title")
 
         # Format the date
@@ -171,6 +183,19 @@ def display_announcements(db):
                 st.markdown(f"🤖 **LLM Says ({category}):** {reason}")
 
         st.markdown("<hr style=\"margin-top:0.5em;margin-bottom:0.5em;\">", unsafe_allow_html=True)
+
+    # Pagination controls below announcements
+    col_prev, col_page, col_next = st.columns([1,2,1])
+    with col_prev:
+        if st.button("⬅️ Prev", key="ann_prev", disabled=st.session_state["ann_page"] == 0):
+            st.session_state["ann_page"] = max(st.session_state["ann_page"] - 1, 0)
+            st.stop()
+    with col_page:
+        st.markdown(f"<div style='text-align:center;'>Page <b>{st.session_state['ann_page']+1}</b> of <b>{total_pages}</b></div>", unsafe_allow_html=True)
+    with col_next:
+        if st.button("Next ➡️", key="ann_next", disabled=st.session_state["ann_page"] >= total_pages - 1):
+            st.session_state["ann_page"] = min(st.session_state["ann_page"] + 1, total_pages - 1)
+            st.stop()
 
 
 def convert_to_csv(announcements, db):
