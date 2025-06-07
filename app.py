@@ -326,13 +326,117 @@ def main():
     db = get_db()
     
     # Create tabs for different views
-    tab1, tab2 = st.tabs(["Announcements", "Scraper Status"])
+    tab1, tab2, tab3 = st.tabs(["Announcements", "Schools", "Scraper Status"])
     
     with tab1:
         display_announcements(db)
-        
+    
     with tab2:
+        display_schools_summary(db)
+        
+    with tab3:
         display_scraper_status(db)
+
+
+def display_schools_summary(db):
+    """Display a summary table of all schools with their most recent announcements."""
+    st.markdown("### Schools Summary")
+    
+    # Get all schools from the database
+    schools = list(db.schools.find({}, {"name": 1, "color": 1, "scrapers": 1}).sort("name", 1))
+    
+    if not schools:
+        st.warning("No schools found in the database.")
+        return
+    
+    # Create a DataFrame to hold school information
+    schools_data = []
+    
+    for school in schools:
+        school_name = school.get("name", "Unknown School")
+        school_color = school.get("color", "#000000")
+        
+        # Count the number of scrapers
+        scrapers = school.get("scrapers", [])
+        scraper_count = len(scrapers)
+        
+        # Find the most recent announcement for this school
+        latest_announcement = db.announcements.find_one(
+            {"school": school_name},
+            {"title": 1, "date": 1, "url": 1},
+            sort=[("date", -1)]
+        )
+        
+        # Extract announcement details
+        latest_title = "No announcements"
+        latest_date = "N/A"
+        latest_url = ""
+        sort_date = datetime(1970, 1, 1)  # Default old date for sorting
+        
+        if latest_announcement:
+            latest_title = latest_announcement.get("title", "No title")
+            
+            date_value = latest_announcement.get("date")
+            if isinstance(date_value, datetime):
+                latest_date = date_value.strftime("%Y-%m-%d")
+                sort_date = date_value  # Store actual datetime for sorting
+            else:
+                latest_date = str(date_value) if date_value else "Unknown date"
+                
+            latest_url = latest_announcement.get("url", "")
+        
+        # Count total announcements for this school
+        announcement_count = db.announcements.count_documents({"school": school_name})
+        
+        # Add data to the list
+        schools_data.append({
+            "School": school_name,
+            "Color": school_color,
+            "Scrapers": scraper_count,
+            "Announcements": announcement_count,
+            "Latest Date": latest_date,
+            "Sort Date": sort_date,  # Hidden column for sorting
+            "Latest Title": latest_title,
+            "URL": latest_url
+        })
+    
+    # Convert to DataFrame
+    df = pd.DataFrame(schools_data)
+    
+    # Sort by 'Sort Date' in descending order (most recent first)
+    df = df.sort_values(by="Sort Date", ascending=False)
+    
+    # Add school colors as a background in the School column for visual distinction
+    # We'll use a separate column for display with Streamlit's native components
+    
+    # Create a DataFrame with the columns we want to display
+    display_df = pd.DataFrame({
+        "School": [f"{school['School']}" for school in df.to_dict('records')],
+        "Scrapers": [school["Scrapers"] for school in df.to_dict('records')],
+        "Announcements": [school["Announcements"] for school in df.to_dict('records')],
+        "Latest Date": [school["Latest Date"] for school in df.to_dict('records')],
+        "Latest Title": [school["Latest Title"] for school in df.to_dict('records')],
+        "URL": [school["URL"] for school in df.to_dict('records')]
+    })
+
+    # Add a note about the total number of schools
+    st.write(f"Total schools: **{len(schools)}**")
+    
+    # Use st.dataframe with basic configuration
+    st.dataframe(
+        display_df,#.drop(columns=['URL']),  # Exclude URL column from display as we've embedded the links
+        use_container_width=True,
+        hide_index=True,
+        height=800,
+        column_config={
+            "URL": st.column_config.LinkColumn(
+                "URL", 
+                help="Link to the most recent announcement.", 
+                display_text="Link"
+            )
+        }
+    )
+    
 
 
 if __name__ == "__main__":
