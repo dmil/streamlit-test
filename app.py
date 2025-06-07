@@ -254,7 +254,6 @@ def convert_to_csv(announcements, db):
 def display_scraper_status(db):
     """Display the scraper status tab."""
     st.markdown("### Scraper Status")
-    # st.markdown("Overview of all scrapers and their last run times by school.")
     
     # Fetch all schools with scraper information
     schools = list(db.schools.find(
@@ -270,43 +269,113 @@ def display_scraper_status(db):
     total_scrapers = sum(len(school.get("scrapers", [])) for school in schools)
     st.write(f"Total scrapers: **{total_scrapers}** across **{len(schools)}** schools")
     
-    # Create an expandable section for each school
+    # Create a list to store all scrapers data
+    all_scrapers_data = []
+    
+    # Collect data from all schools and their scrapers
     for school in schools:
         school_name = school.get("name", "Unknown School")
         school_color = school.get("color", "#000000")
         scrapers = school.get("scrapers", [])
-        
-        # Format the last run date
-        last_run = school.get("last_run")
-        if isinstance(last_run, datetime):
-            last_run_str = last_run.strftime("%Y-%m-%d %H:%M:%S")
-        else:
-            last_run_str = "Never run" if last_run is None else str(last_run)
-        
-        # Create an expander for each school with the last run time in the title
-        expander_title = f"{school_name} - Last run: {last_run_str} - ({len(scrapers)} scrapers)"
-        with st.expander(expander_title, expanded=False):
-            if not scrapers:
-                st.info(f"No scrapers configured for {school_name}")
-                continue
+               
+        # Add each scraper with its school information
+        for scraper in scrapers:
+            # Format the last run date
+            last_run = scraper.get("last_run")
+            if isinstance(last_run, datetime):
+                last_run_str = last_run.strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                last_run_str = "" if last_run is None else str(last_run)
+                
+            # Get the last run count
+            last_run_count = scraper.get("last_run_count", 0)
+            last_run_count_str = str(last_run_count) if last_run_count is not None else "0"
             
-            # Create a table for the scrapers
-            data = []
-            for scraper in scrapers:
-                data.append({
-                    "Name": scraper.get("name", "Unnamed"),
-                    "Path": scraper.get("path", "No path"),
-                    "URL": scraper.get("url", "No URL")
-                })
+            # Get scraper path to find the latest announcement from this scraper
+            scraper_path = scraper.get("path", "")
+            latest_announcement = None
+            latest_announcement_title = ""
+            latest_announcement_date = ""
             
-            # Display as a table
-            # st.table(pd.DataFrame(data).set_index('Name'))
-            # Display as a table
-            # st.table(data)
-            df = pd.DataFrame(data)
-            # # Extract filename from path
-            df['Path'] = df['Path'].apply(lambda x: x.split('/')[-1].split('.')[-1])
-            st.table(df.set_index('Path'))
+            if scraper_path:
+                # Find the most recent announcement from this scraper
+                latest_announcement = db.announcements.find_one(
+                    {"scraper": scraper_path},
+                    {"title": 1, "date": 1},
+                    sort=[("date", -1)]
+                )
+                
+                if latest_announcement:
+                    latest_announcement_title = latest_announcement.get("title", "")
+                    date_value = latest_announcement.get("date")
+                    if isinstance(date_value, datetime):
+                        latest_announcement_date = date_value.strftime("%Y-%m-%d")
+                    else:
+                        latest_announcement_date = str(date_value)
+
+            all_scrapers_data.append({
+                "School": school_name,
+                "School Color": school_color,
+                "Last Run": last_run_str,
+                "Last Run Count": last_run_count_str,
+                "Scraper Name": scraper.get("name", "Unnamed"),
+                "Path": scraper.get("path", "No path").split('/')[-1].split('.')[-1],  # Extract filename from path
+                "URL": scraper.get("url", "No URL"),
+                "Latest Title": latest_announcement_title,
+                "Latest Date": latest_announcement_date
+            })
+    
+    if not all_scrapers_data:
+        st.info("No scrapers found in the database.")
+        return
+        
+    # Create a DataFrame from all scrapers
+    scrapers_df = pd.DataFrame(all_scrapers_data)
+
+    # remove blanks
+    scrapers_df = scrapers_df.dropna(subset=["Scraper Name", "URL"])
+        
+    # Select columns for display
+    display_df = scrapers_df[["School", "Scraper Name", "Last Run", "Last Run Count", "Latest Title", "Latest Date", "URL"]]
+    
+    # Display as an interactive sortable table that uses the full page height
+    st.dataframe(
+        display_df,
+        column_config={
+            "School": st.column_config.TextColumn(
+                "School",
+                help="The university or college",
+                width="medium",
+            ),
+            "Scraper Name": st.column_config.TextColumn(
+                "Scraper Name",
+                help="The name of the scraper",
+            ),
+            "URL": st.column_config.LinkColumn(
+                "URL",
+                help="The URL being scraped",
+            ),
+            "Last Run": st.column_config.TextColumn(
+                "Last Run",
+                help="When the scraper was last executed",
+            ),
+            "Last Run Count": st.column_config.NumberColumn(
+                "Count",
+                help="Number of items retrieved in the last run",
+                format="%d",
+            ),
+            "Latest Title": st.column_config.TextColumn(
+                "Latest Article",
+                help="The title of the most recent announcement from this scraper",
+            ),
+            "Latest Date": st.column_config.TextColumn(
+                "Article Date",
+                help="The date of the most recent announcement from this scraper",
+            ),
+        },
+        hide_index=True,
+        height=800,  # Set a large fixed height to take up most of the page
+    )
 
 
 
