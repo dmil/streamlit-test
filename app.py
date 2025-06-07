@@ -19,6 +19,9 @@ load_dotenv(override=True)
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME", "campus_data")
 
+# Define the start date for filtering announcements
+start_date = datetime(2025, 1, 1)
+
 # Connect to MongoDB
 def get_db():
     client = MongoClient(MONGO_URI)
@@ -88,8 +91,8 @@ def display_announcements(db):
     if filter_conditions:
         query["$or"] = filter_conditions
 
-    # Add date filter for announcements after Jan 1, 2025
-    query["date"] = {"$gte": datetime(2025, 1, 1)}
+    # Add date filter for announcements after the start date
+    query["date"] = {"$gte": start_date}
 
     # Add content search filter if search_term is provided
     if search_term.strip():
@@ -100,7 +103,7 @@ def display_announcements(db):
     announcements = list(cursor)
     num_announcements = len(announcements)
 
-    st.write(f"Number of announcements: **{num_announcements}** (from Jan 1, 2025 onwards)")
+    st.write(f"Number of announcements: **{num_announcements}** (from {start_date.strftime('%B %d, %Y')} onwards)")
     
     # Add download button for CSV
     if announcements:
@@ -386,7 +389,8 @@ def display_schools_summary(db):
             latest_url = latest_announcement.get("url", "")
         
         # Count total announcements for this school
-        announcement_count = db.announcements.count_documents({"school": school_name})
+        announcement_count = db.announcements.count_documents({"school": school_name, "date": {"$gte": start_date}})
+        
         
         # Add data to the list
         schools_data.append({
@@ -421,6 +425,7 @@ def display_schools_summary(db):
 
     # Add a note about the total number of schools
     st.write(f"Total schools: **{len(schools)}**")
+    st.write(f"Total announcements (since {start_date.strftime('%B %d, %Y')}): **{df['Announcements'].sum()}**")
     
     # Use st.dataframe with basic configuration
     st.dataframe(
