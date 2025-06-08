@@ -256,7 +256,7 @@ def convert_to_csv(announcements, db):
 
 def display_scraper_status(db):
     """Display the scraper status tab."""
-    st.markdown("### Scraper Status")
+    st.markdown("### URLs")
     
     # Fetch all schools with scraper information
     schools = list(db.schools.find(
@@ -270,7 +270,7 @@ def display_scraper_status(db):
     
     # Count total scrapers
     total_scrapers = sum(len(school.get("scrapers", [])) for school in schools)
-    st.write(f"Total scrapers: **{total_scrapers}** across **{len(schools)}** schools")
+    st.write(f"Total URLs: **{total_scrapers}** across **{len(schools)}** schools")
     
     # Create a list to hold all scrapers data
     all_scrapers_data = []
@@ -308,11 +308,14 @@ def display_scraper_status(db):
             else:
                 path_suffix = path
 
+            # path number is the last digit of the path suffix if it exists
+            path_number = path_suffix[-1] if path_suffix and path_suffix[-1].isdigit() else 1
+
             # Add to the list
             all_scrapers_data.append({
                 "School": school_name,
                 "Name": scraper.get("name", "Unnamed"),
-                "Path": path_suffix,
+                "Path": path_number,
                 "URL": scraper.get("url", "No URL"),
                 "Last Run": last_run_str,
                 "Last Run Count": last_run_count,
@@ -356,7 +359,7 @@ def main():
     db = get_db()
     
     # Create tabs for different views
-    tab1, tab2, tab3 = st.tabs(["Announcements", "Schools", "Scraper Status"])
+    tab1, tab2, tab3 = st.tabs(["Announcements", "Schools", "URLs"])
     
     with tab1:
         display_announcements(db)
