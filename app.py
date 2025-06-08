@@ -4,11 +4,13 @@ Simple Streamlit front-end to display announcements from MongoDB.
 Shows title, school, date, URL, and source base URL for each announcement.
 """
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 import streamlit as st
 from pymongo import MongoClient
 import pandas as pd
 import io
+import pytz
+from tzlocal import get_localzone
 
 
 # Load environment variables from .env file
@@ -21,6 +23,22 @@ DB_NAME = os.environ.get("DB_NAME", "campus_data")
 
 # Define the start date for filtering announcements
 start_date = datetime(2025, 1, 1)
+
+# Function to convert UTC datetime to local time
+def utc_to_local(utc_dt):
+    if utc_dt is None:
+        return None
+    if not isinstance(utc_dt, datetime):
+        return utc_dt
+    
+    # If datetime doesn't have tzinfo, assume it's UTC
+    if utc_dt.tzinfo is None:
+        utc_dt = utc_dt.replace(tzinfo=timezone.utc)
+    
+    # Convert to local timezone
+    local_tz = get_localzone()
+    local_dt = utc_dt.astimezone(local_tz)
+    return local_dt
 
 # Connect to MongoDB
 def get_db():
@@ -131,10 +149,12 @@ def display_announcements(db):
     for ann in paged_announcements:
         title = ann.get("title", "No Title")
 
-        # Format the date
+        # Convert UTC date to local time and format it
         date_value = ann.get("date")
         if isinstance(date_value, datetime):
-            date_str = date_value.strftime("%Y-%m-%d")
+            # Convert UTC to local
+            local_date = utc_to_local(date_value)
+            date_str = local_date.strftime("%Y-%m-%d %I:%M:%S %p")
         else:
             date_str = str(date_value)
 
@@ -244,9 +264,9 @@ def convert_to_csv(announcements, db):
     # Convert to pandas DataFrame and then to CSV
     df = pd.DataFrame(processed_data)
     
-    # Convert datetime objects to strings
+    # Convert datetime objects from UTC to local time and then to strings
     if 'date' in df.columns:
-        df['date'] = df['date'].apply(lambda x: x.strftime('%Y-%m-%d') if isinstance(x, datetime) else str(x))
+        df['date'] = df['date'].apply(lambda x: utc_to_local(x).strftime('%Y-%m-%d %I:%M:%S %p') if isinstance(x, datetime) else str(x))
     
     # Convert to CSV
     csv_buffer = io.StringIO()
@@ -281,20 +301,24 @@ def display_scraper_status(db):
         scrapers = school.get("scrapers", [])
         
         for scraper in scrapers:
-            # Format the last run date for the scraper
+            # Convert UTC last run date to local time and format it
             last_run = scraper.get("last_run")
             if isinstance(last_run, datetime):
-                last_run_str = last_run.strftime("%Y-%m-%d %H:%M:%S")
+                # Convert UTC to local
+                local_last_run = utc_to_local(last_run)
+                last_run_str = local_last_run.strftime("%Y-%m-%d %I:%M:%S %p")
             else:
                 last_run_str = "" if last_run is None else str(last_run)
                 
             # Get last run count (indicates successful runs)
             last_run_count = scraper.get("last_run_count", 0)
             
-            # Format the last non-empty run date for the scraper
+            # Convert UTC last non-empty run date to local time and format it
             last_nonempty_run = scraper.get("last_nonempty_run")
             if isinstance(last_nonempty_run, datetime):
-                last_nonempty_run_str = last_nonempty_run.strftime("%Y-%m-%d %H:%M:%S")
+                # Convert UTC to local
+                local_last_nonempty_run = utc_to_local(last_nonempty_run)
+                last_nonempty_run_str = local_last_nonempty_run.strftime("%Y-%m-%d %I:%M:%S %p")
             else:
                 last_nonempty_run_str = "" if last_nonempty_run is None else str(last_nonempty_run)
                 
@@ -314,7 +338,7 @@ def display_scraper_status(db):
             # Add to the list
             all_scrapers_data.append({
                 "School": school_name,
-                "Name": scraper.get("name", "Unnamed"),
+                "Name": scraper.get("name", "").replace(" announcements", ""),
                 "Path": path_number,
                 "URL": scraper.get("url", "No URL"),
                 "Last Run": last_run_str,
@@ -325,8 +349,8 @@ def display_scraper_status(db):
     
     # Convert to DataFrame
     df = pd.DataFrame(all_scrapers_data)\
-        .sort_values(by=["Last Success", "Last Run"], ascending=False)
-    
+        .sort_values(by=["Last Success", "School", "Path"], ascending=[False, True, True])
+
     # Use Streamlit's native dataframe
     st.dataframe(
         df,
@@ -412,7 +436,9 @@ def display_schools_summary(db):
             
             date_value = latest_announcement.get("date")
             if isinstance(date_value, datetime):
-                latest_date = date_value.strftime("%Y-%m-%d")
+            # Convert UTC to local
+                local_date = utc_to_local(date_value)
+                latest_date = local_date.strftime("%Y-%m-%d")
                 sort_date = date_value  # Store actual datetime for sorting
             else:
                 latest_date = str(date_value) if date_value else "Unknown date"

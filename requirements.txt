@@ -4,3 +4,5 @@ openai
 streamlit
 newspaper3k
 python-dotenv
+pytz
+tzlocal
