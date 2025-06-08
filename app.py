@@ -324,7 +324,8 @@ def display_scraper_status(db):
             })
     
     # Convert to DataFrame
-    df = pd.DataFrame(all_scrapers_data)
+    df = pd.DataFrame(all_scrapers_data)\
+        .sort_values(by=["Last Success", "Last Run"], ascending=False)
     
     # Use Streamlit's native dataframe
     st.dataframe(
