@@ -257,12 +257,11 @@ def convert_to_csv(announcements, db):
 def display_scraper_status(db):
     """Display the scraper status tab."""
     st.markdown("### Scraper Status")
-    # st.markdown("Overview of all scrapers and their last run times by school.")
     
     # Fetch all schools with scraper information
     schools = list(db.schools.find(
         {"scrapers": {"$exists": True}}, 
-        {"name": 1, "color": 1, "scrapers": 1, "last_run": 1}
+        {"name": 1, "scrapers": 1, "last_run": 1}
     ).sort("name", 1))
     
     if not schools:
@@ -273,43 +272,71 @@ def display_scraper_status(db):
     total_scrapers = sum(len(school.get("scrapers", [])) for school in schools)
     st.write(f"Total scrapers: **{total_scrapers}** across **{len(schools)}** schools")
     
-    # Create an expandable section for each school
+    # Create a list to hold all scrapers data
+    all_scrapers_data = []
+    
+    # Extract all scrapers from all schools into a flat list with school info
     for school in schools:
         school_name = school.get("name", "Unknown School")
-        school_color = school.get("color", "#000000")
         scrapers = school.get("scrapers", [])
         
-        # Format the last run date
-        last_run = school.get("last_run")
-        if isinstance(last_run, datetime):
-            last_run_str = last_run.strftime("%Y-%m-%d %H:%M:%S")
-        else:
-            last_run_str = "Never run" if last_run is None else str(last_run)
-        
-        # Create an expander for each school with the last run time in the title
-        expander_title = f"{school_name} - Last run: {last_run_str} - ({len(scrapers)} scrapers)"
-        with st.expander(expander_title, expanded=False):
-            if not scrapers:
-                st.info(f"No scrapers configured for {school_name}")
-                continue
+        for scraper in scrapers:
+            # Format the last run date for the scraper
+            last_run = scraper.get("last_run")
+            if isinstance(last_run, datetime):
+                last_run_str = last_run.strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                last_run_str = "" if last_run is None else str(last_run)
+                
+            # Get last run count (indicates successful runs)
+            last_run_count = scraper.get("last_run_count", 0)
             
-            # Create a table for the scrapers
-            data = []
-            for scraper in scrapers:
-                data.append({
-                    "Name": scraper.get("name", "Unnamed"),
-                    "Path": scraper.get("path", "No path"),
-                    "URL": scraper.get("url", "No URL")
-                })
+            # Format the last non-empty run date for the scraper
+            last_nonempty_run = scraper.get("last_nonempty_run")
+            if isinstance(last_nonempty_run, datetime):
+                last_nonempty_run_str = last_nonempty_run.strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                last_nonempty_run_str = "" if last_nonempty_run is None else str(last_nonempty_run)
+                
+            # Get last non-empty run count (indicates successful runs with content)
+            last_nonempty_run_count = scraper.get("last_nonempty_run_count", "")
             
-            # Display as a table
-            # st.table(pd.DataFrame(data).set_index('Name'))
-            # Display as a table
-            # st.table(data)
-            df = pd.DataFrame(data)
-            # # Extract filename from path
-            df['Path'] = df['Path'].apply(lambda x: x.split('/')[-1].split('.')[-1])
-            st.table(df.set_index('Path'))
+            # Extract path suffix (everything after the last dot)
+            path = scraper.get("path", "No path")
+            if path != "No path":
+                path_suffix = path.split('.')[-1]
+            else:
+                path_suffix = path
+
+            # Add to the list
+            all_scrapers_data.append({
+                "School": school_name,
+                "Name": scraper.get("name", "Unnamed"),
+                "Path": path_suffix,
+                "URL": scraper.get("url", "No URL"),
+                "Last Run": last_run_str,
+                "Last Run Count": last_run_count,
+                "Last Success": last_nonempty_run_str,
+                "Success Count": last_nonempty_run_count
+            })
+    
+    # Convert to DataFrame
+    df = pd.DataFrame(all_scrapers_data)
+    
+    # Use Streamlit's native dataframe
+    st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        height=800,
+        column_config={
+            "URL": st.column_config.LinkColumn(
+                "URL",
+                help="Source URL for the scraper",
+                display_text="Link"
+            )
+        }
+    )
 
 
 
