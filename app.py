@@ -51,8 +51,8 @@ def display_announcements(db):
     st.markdown('⚠️ Please note that this is an unedited **first draft** proof-of-concept. Classifications **WILL BE** inaccurate. ⚠️', unsafe_allow_html=True)
 
     # Fetch all unique schools from the database
-    schools_cursor = db.schools.find({}, {"_id": 0, "name": 1})
-    schools = [{"name": school.get("name")} for school in schools_cursor]
+    schools_cursor = db.orgs.find({}, {"_id": 0, "name": 1})
+    schools = [{"name": org.get("name")} for org in schools_cursor]
 
     # Create a dropdown for school selection with alphabetically sorted options
     school_names = [school["name"] for school in schools]
@@ -92,7 +92,7 @@ def display_announcements(db):
     # Build the query based on the selected school
     query = {}
     if selected_school != "All":
-        query["school"] = selected_school
+        query["org"] = selected_school
 
     # Add filters based on selected categories
     filter_conditions = []
@@ -117,7 +117,7 @@ def display_announcements(db):
         query["content"] = {"$regex": search_term, "$options": "i"}
 
     # Fetch announcements for current page (remove pagination here)
-    cursor = db.announcements.find(query, {"_id": 0}).sort("date", -1)
+    cursor = db.articles.find(query, {"_id": 0}).sort("date", -1)
     announcements = list(cursor)
     num_announcements = len(announcements)
 
@@ -159,9 +159,9 @@ def display_announcements(db):
             date_str = str(date_value)
 
         # Get school name and color
-        school_name = ann.get("school", "Unknown School")
+        school_name = ann.get("org", "Unknown School")
         school_color = "#000000"  # Default to black if no color is found
-        school_doc = db.schools.find_one({"name": school_name}, {"color": 1})
+        school_doc = db.orgs.find_one({"name": school_name}, {"color": 1})
         if school_doc and school_doc.get("color"):
             school_color = school_doc["color"]
 
@@ -230,7 +230,7 @@ def convert_to_csv(announcements, db):
         # Extract base data
         processed_ann = {
             "title": ann.get("title", ""),
-            "school": ann.get("school", ""),
+            "school": ann.get("org", ""),
             "date": ann.get("date"),
             "url": ann.get("url", ""),
             # "base_url": ann.get("base_url", "")
@@ -279,7 +279,7 @@ def display_scraper_status(db):
     st.markdown("### URLs")
     
     # Fetch all schools with scraper information
-    schools = list(db.schools.find(
+    schools = list(db.orgs.find(
         {"scrapers": {"$exists": True}}, 
         {"name": 1, "scrapers": 1, "last_run": 1}
     ).sort("name", 1))
@@ -351,6 +351,9 @@ def display_scraper_status(db):
     df = pd.DataFrame(all_scrapers_data)\
         .sort_values(by=["Last Success", "School", "Path"], ascending=[False, True, True])
 
+    # Ensure 'Path' column is string type for Arrow compatibility
+    df["Path"] = df["Path"].astype(str)
+
     # Use Streamlit's native dataframe
     st.dataframe(
         df,
@@ -401,7 +404,7 @@ def display_schools_summary(db):
     st.markdown("### Schools Summary")
     
     # Get all schools from the database
-    schools = list(db.schools.find({}, {"name": 1, "color": 1, "scrapers": 1}).sort("name", 1))
+    schools = list(db.orgs.find({}, {"name": 1, "color": 1, "scrapers": 1}).sort("name", 1))
     
     if not schools:
         st.warning("No schools found in the database.")
@@ -419,8 +422,8 @@ def display_schools_summary(db):
         scraper_count = len(scrapers)
         
         # Find the most recent announcement for this school
-        latest_announcement = db.announcements.find_one(
-            {"school": school_name},
+        latest_announcement = db.articles.find_one(
+            {"org": school_name},
             {"title": 1, "date": 1, "url": 1},
             sort=[("date", -1)]
         )
@@ -446,7 +449,7 @@ def display_schools_summary(db):
             latest_url = latest_announcement.get("url", "")
         
         # Count total announcements for this school
-        announcement_count = db.announcements.count_documents({"school": school_name, "date": {"$gte": start_date}})
+        announcement_count = db.articles.count_documents({"org": school_name, "date": {"$gte": start_date}})
         
         
         # Add data to the list
