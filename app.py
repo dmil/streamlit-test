@@ -452,7 +452,7 @@ def main():
         menu_items={"About": "This is a draft version of the Campus Announcements Tracker."}
     )
     
-    st.title("Campus Announcements [DRAFT]")
+    st.title("Campus Announcements [ DRAFT]")
     st.markdown("Announcements from the provosts' and presidents' offices at select universities.")
 
     db = get_db()
