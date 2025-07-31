@@ -62,29 +62,68 @@ def display_announcements(db):
 
     st.markdown('>_Check any box to filter for items identified by our LLM as related to that category.<br/>Hover on each question mark for more information about the criteria._', unsafe_allow_html=True)
 
-    # Create a columns layout for the checkboxes
-    col1, col2 = st.columns(2)
+    # Add Clear All Filters button
+    col_clear, col_space = st.columns([1, 4])
+    with col_clear:
+        if st.button("🗑️ Clear All Filters", help="Reset all category filters"):
+            # Clear all filter states by removing them from session state
+            filter_keys = [
+                'show_govt_related_ann', 'show_govt_supportive_ann', 'show_govt_opposing_ann',
+                'show_lawsuit_related_ann', 'show_funding_related_ann', 'show_protest_related_ann',
+                'show_layoff_related_ann', 'show_president_related_ann', 'show_provost_related_ann',
+                'show_faculty_related_ann', 'show_trustees_related_ann', 'show_trump_related_ann'
+            ]
+            for key in filter_keys:
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.rerun()
 
-    llm_prompt = (
-        "Analyze this university announcement and determine if it:\n"
-        "1. Is related to the university responding to federal government or federal administration actions\n"
-        "2. Mentions a lawsuit or legal action\n"
-        "3. Discusses funding cuts or funding issues\n"
-        "4. Relates to campus protests or disruptions\n\n"
-        "For each category, provide whether it's related (true/false) and if true, a brief reason."
-    )
+    # Create a columns layout for the checkboxes (4 columns with 3 checkboxes each)
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
         show_govt_related = st.checkbox("👨‍⚖️ Government Related", 
-            help="LLM Prompt: Items where the university is supporting or opposing federal government or administration actions")
-        show_lawsuit_related = st.checkbox("⚖️ Lawsuit Related", 
-            help="LLM Prompt: Items mentioning lawsuits or legal actions related to the university")        
+            key="show_govt_related_ann",
+            help="LLM Prompt: Items where the university is responding to federal government or administration actions")
+        show_govt_supportive = st.checkbox("🤝 Government Supportive", 
+            key="show_govt_supportive_ann",
+            help="LLM Prompt: Items where the university praises or emphasizes cooperation with the federal government")
+        show_govt_opposing = st.checkbox("👎 Government Opposing", 
+            key="show_govt_opposing_ann",
+            help="LLM Prompt: Items where the announcement opposes or criticizes federal government actions")
         
     with col2:
+        show_lawsuit_related = st.checkbox("⚖️ Lawsuit Related", 
+            key="show_lawsuit_related_ann",
+            help="LLM Prompt: Items mentioning lawsuits or legal actions related to the university")
         show_funding_related = st.checkbox("💰 Funding Related", 
+            key="show_funding_related_ann",
             help="LLM Prompt: Items discussing funding cuts or financial issues")
         show_protest_related = st.checkbox("🪧 Protest Related", 
+            key="show_protest_related_ann",
             help="LLM Prompt: Items mentioning campus protests or disruptions")
+
+    with col3:
+        show_layoff_related = st.checkbox("✂️ Layoff Related", 
+            key="show_layoff_related_ann",
+            help="LLM Prompt: Items discussing layoffs, job cuts, staff reductions, or employment terminations")
+        show_president_related = st.checkbox("🎓 President Related", 
+            key="show_president_related_ann",
+            help="LLM Prompt: Items related to the president of the school")
+        show_provost_related = st.checkbox("📚 Provost Related", 
+            key="show_provost_related_ann",
+            help="LLM Prompt: Items related to the provost of the school")
+
+    with col4:
+        show_faculty_related = st.checkbox("👨‍🏫 Faculty Related", 
+            key="show_faculty_related_ann",
+            help="LLM Prompt: Items related to faculty members, faculty actions, or faculty governance")
+        show_trustees_related = st.checkbox("🏛️ Trustees Related", 
+            key="show_trustees_related_ann",
+            help="LLM Prompt: Items related to the board of trustees or trustee actions")
+        show_trump_related = st.checkbox("🇺🇸 Trump Related", 
+            key="show_trump_related_ann",
+            help="LLM Prompt: Items related to Donald Trump (mentions, policies, reactions to Trump, etc.)")
 
     # Add a text search bar for content search
     search_term = st.text_input("🔍 Search announcement content", value="", help="Enter keywords to search announcement content (case-insensitive)")
@@ -98,12 +137,28 @@ def display_announcements(db):
     filter_conditions = []
     if show_govt_related:
         filter_conditions.append({"llm_response.government_related.related": True})
+    if show_govt_supportive:
+        filter_conditions.append({"llm_response.government_supportive.related": True})
+    if show_govt_opposing:
+        filter_conditions.append({"llm_response.government_opposing.related": True})
     if show_lawsuit_related:
         filter_conditions.append({"llm_response.lawsuit_related.related": True})
     if show_funding_related:
         filter_conditions.append({"llm_response.funding_related.related": True})
     if show_protest_related:
         filter_conditions.append({"llm_response.protest_related.related": True})
+    if show_layoff_related:
+        filter_conditions.append({"llm_response.layoff_related.related": True})
+    if show_president_related:
+        filter_conditions.append({"llm_response.president_related.related": True})
+    if show_provost_related:
+        filter_conditions.append({"llm_response.provost_related.related": True})
+    if show_faculty_related:
+        filter_conditions.append({"llm_response.faculty_related.related": True})
+    if show_trustees_related:
+        filter_conditions.append({"llm_response.trustees_related.related": True})
+    if show_trump_related:
+        filter_conditions.append({"llm_response.trump_related.related": True})
 
     # Combine filters with OR if any are selected
     if filter_conditions:
@@ -190,20 +245,44 @@ def display_announcements(db):
             categories_found = []
 
             if llm_response.get("government_related", {}).get("related"):
-                categories_found.append(("👨‍⚖️ Government", llm_response["government_related"]["reason"]))
+                categories_found.append(("👨‍⚖️ Government", llm_response["government_related"].get("reason", "")))
+
+            if llm_response.get("government_supportive", {}).get("related"):
+                categories_found.append(("🤝 Gov Supportive", llm_response["government_supportive"].get("reason", "")))
+
+            if llm_response.get("government_opposing", {}).get("related"):
+                categories_found.append(("👎 Gov Opposing", llm_response["government_opposing"].get("reason", "")))
 
             if llm_response.get("lawsuit_related", {}).get("related"):
-                categories_found.append(("⚖️ Lawsuit", llm_response["lawsuit_related"]["reason"]))
+                categories_found.append(("⚖️ Lawsuit", llm_response["lawsuit_related"].get("reason", "")))
 
             if llm_response.get("funding_related", {}).get("related"):
-                categories_found.append(("💰 Funding", llm_response["funding_related"]["reason"]))
+                categories_found.append(("💰 Funding", llm_response["funding_related"].get("reason", "")))
 
             if llm_response.get("protest_related", {}).get("related"):
-                categories_found.append(("🪧 Protest", llm_response["protest_related"]["reason"]))
+                categories_found.append(("🪧 Protest", llm_response["protest_related"].get("reason", "")))
+
+            if llm_response.get("layoff_related", {}).get("related"):
+                categories_found.append(("✂️ Layoffs", llm_response["layoff_related"].get("reason", "")))
+
+            if llm_response.get("president_related", {}).get("related"):
+                categories_found.append(("🎓 President", llm_response["president_related"].get("reason", "")))
+
+            if llm_response.get("provost_related", {}).get("related"):
+                categories_found.append(("📚 Provost", llm_response["provost_related"].get("reason", "")))
+
+            if llm_response.get("faculty_related", {}).get("related"):
+                categories_found.append(("👨‍🏫 Faculty", llm_response["faculty_related"].get("reason", "")))
+
+            if llm_response.get("trustees_related", {}).get("related"):
+                categories_found.append(("🏛️ Trustees", llm_response["trustees_related"].get("reason", "")))
+
+            if llm_response.get("trump_related", {}).get("related"):
+                categories_found.append(("🇺🇸 Trump", llm_response["trump_related"].get("reason", "")))
 
             # Display all found categories
             for category, reason in categories_found:
-                st.markdown(f"🤖 **LLM Says ({category}):** {reason}")
+                st.markdown(f"🤖 **AI Classification ({category}):** {reason}")
 
         st.markdown("<hr style=\"margin-top:0.5em;margin-bottom:0.5em;\">", unsafe_allow_html=True)
 
@@ -239,25 +318,17 @@ def convert_to_csv(announcements, db):
         # Add LLM response fields if available
         llm_response = ann.get("llm_response", {})
         
-        # Add government related info
-        govt_data = llm_response.get("government_related", {})
-        processed_ann["govt_related"] = govt_data.get("related", False)
-        processed_ann["govt_reason"] = govt_data.get("reason", "") if govt_data.get("related") else ""
+        # Add all classification fields
+        classification_fields = [
+            "government_related", "government_supportive", "government_opposing",
+            "lawsuit_related", "funding_related", "protest_related", "layoff_related",
+            "president_related", "provost_related", "faculty_related", "trustees_related", "trump_related"
+        ]
         
-        # Add lawsuit related info
-        lawsuit_data = llm_response.get("lawsuit_related", {})
-        processed_ann["lawsuit_related"] = lawsuit_data.get("related", False)
-        processed_ann["lawsuit_reason"] = lawsuit_data.get("reason", "") if lawsuit_data.get("related") else ""
-        
-        # Add funding related info
-        funding_data = llm_response.get("funding_related", {})
-        processed_ann["funding_related"] = funding_data.get("related", False)
-        processed_ann["funding_reason"] = funding_data.get("reason", "") if funding_data.get("related") else ""
-        
-        # Add protest related info
-        protest_data = llm_response.get("protest_related", {})
-        processed_ann["protest_related"] = protest_data.get("related", False)
-        processed_ann["protest_reason"] = protest_data.get("reason", "") if protest_data.get("related") else ""
+        for field_name in classification_fields:
+            field_data = llm_response.get(field_name, {})
+            processed_ann[f"{field_name}"] = field_data.get("related", False)
+            processed_ann[f"{field_name}_reason"] = field_data.get("reason", "") if field_data.get("related") else ""
         
         processed_data.append(processed_ann)
     
