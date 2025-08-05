@@ -68,7 +68,8 @@ def display_announcements(db):
         if st.button("🗑️ Clear All Filters", help="Reset all category filters"):
             # Clear all filter states by removing them from session state
             filter_keys = [
-                'show_govt_related_ann', 'show_govt_supportive_ann', 'show_govt_opposing_ann',
+                'show_govt_related_ann', 
+                # 'show_govt_supportive_ann', 'show_govt_opposing_ann',
                 'show_lawsuit_related_ann', 'show_funding_related_ann', 'show_protest_related_ann',
                 'show_layoff_related_ann', 'show_president_related_ann', 'show_provost_related_ann',
                 'show_faculty_related_ann', 'show_trustees_related_ann', 'show_trump_related_ann'
@@ -85,12 +86,12 @@ def display_announcements(db):
         show_govt_related = st.checkbox("👨‍⚖️ Government Related", 
             key="show_govt_related_ann",
             help="LLM Prompt: Items where the university is responding to federal government or administration actions")
-        show_govt_supportive = st.checkbox("🤝 Government Supportive", 
-            key="show_govt_supportive_ann",
-            help="LLM Prompt: Items where the university praises or emphasizes cooperation with the federal government")
-        show_govt_opposing = st.checkbox("👎 Government Opposing", 
-            key="show_govt_opposing_ann",
-            help="LLM Prompt: Items where the announcement opposes or criticizes federal government actions")
+        # show_govt_supportive = st.checkbox("🤝 Government Supportive", 
+        #     key="show_govt_supportive_ann",
+        #     help="LLM Prompt: Items where the university praises or emphasizes cooperation with the federal government")
+        # show_govt_opposing = st.checkbox("👎 Government Opposing", 
+        #     key="show_govt_opposing_ann",
+        #     help="LLM Prompt: Items where the announcement opposes or criticizes federal government actions")
         
     with col2:
         show_lawsuit_related = st.checkbox("⚖️ Lawsuit Related", 
@@ -137,10 +138,10 @@ def display_announcements(db):
     filter_conditions = []
     if show_govt_related:
         filter_conditions.append({"llm_response.government_related.related": True})
-    if show_govt_supportive:
-        filter_conditions.append({"llm_response.government_supportive.related": True})
-    if show_govt_opposing:
-        filter_conditions.append({"llm_response.government_opposing.related": True})
+    # if show_govt_supportive:
+    #     filter_conditions.append({"llm_response.government_supportive.related": True})
+    # if show_govt_opposing:
+    #     filter_conditions.append({"llm_response.government_opposing.related": True})
     if show_lawsuit_related:
         filter_conditions.append({"llm_response.lawsuit_related.related": True})
     if show_funding_related:
@@ -237,50 +238,44 @@ def display_announcements(db):
         """
         st.markdown(announcement_html, unsafe_allow_html=True)
 
-        # LLM Response Section
+        # LLM Response Section - only show selected categories
         if ann.get("llm_response"):
             llm_response = ann.get("llm_response")
 
-            # Check each category and display if related
+            # Check each category and display if related AND selected by user
             categories_found = []
 
-            if llm_response.get("government_related", {}).get("related"):
+            if show_govt_related and llm_response.get("government_related", {}).get("related"):
                 categories_found.append(("👨‍⚖️ Government", llm_response["government_related"].get("reason", "")))
 
-            if llm_response.get("government_supportive", {}).get("related"):
-                categories_found.append(("🤝 Gov Supportive", llm_response["government_supportive"].get("reason", "")))
-
-            if llm_response.get("government_opposing", {}).get("related"):
-                categories_found.append(("👎 Gov Opposing", llm_response["government_opposing"].get("reason", "")))
-
-            if llm_response.get("lawsuit_related", {}).get("related"):
+            if show_lawsuit_related and llm_response.get("lawsuit_related", {}).get("related"):
                 categories_found.append(("⚖️ Lawsuit", llm_response["lawsuit_related"].get("reason", "")))
 
-            if llm_response.get("funding_related", {}).get("related"):
+            if show_funding_related and llm_response.get("funding_related", {}).get("related"):
                 categories_found.append(("💰 Funding", llm_response["funding_related"].get("reason", "")))
 
-            if llm_response.get("protest_related", {}).get("related"):
+            if show_protest_related and llm_response.get("protest_related", {}).get("related"):
                 categories_found.append(("🪧 Protest", llm_response["protest_related"].get("reason", "")))
 
-            if llm_response.get("layoff_related", {}).get("related"):
+            if show_layoff_related and llm_response.get("layoff_related", {}).get("related"):
                 categories_found.append(("✂️ Layoffs", llm_response["layoff_related"].get("reason", "")))
 
-            if llm_response.get("president_related", {}).get("related"):
+            if show_president_related and llm_response.get("president_related", {}).get("related"):
                 categories_found.append(("🎓 President", llm_response["president_related"].get("reason", "")))
 
-            if llm_response.get("provost_related", {}).get("related"):
+            if show_provost_related and llm_response.get("provost_related", {}).get("related"):
                 categories_found.append(("📚 Provost", llm_response["provost_related"].get("reason", "")))
 
-            if llm_response.get("faculty_related", {}).get("related"):
+            if show_faculty_related and llm_response.get("faculty_related", {}).get("related"):
                 categories_found.append(("👨‍🏫 Faculty", llm_response["faculty_related"].get("reason", "")))
 
-            if llm_response.get("trustees_related", {}).get("related"):
+            if show_trustees_related and llm_response.get("trustees_related", {}).get("related"):
                 categories_found.append(("🏛️ Trustees", llm_response["trustees_related"].get("reason", "")))
 
-            if llm_response.get("trump_related", {}).get("related"):
+            if show_trump_related and llm_response.get("trump_related", {}).get("related"):
                 categories_found.append(("🇺🇸 Trump", llm_response["trump_related"].get("reason", "")))
 
-            # Display all found categories
+            # Display only selected categories that are found
             for category, reason in categories_found:
                 st.markdown(f"🤖 **AI Classification ({category}):** {reason}")
 
@@ -439,8 +434,6 @@ def display_scraper_status(db):
             )
         }
     )
-
-
 
 def main():
     # Set page config - MUST be the first Streamlit command
