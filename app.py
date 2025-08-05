@@ -237,6 +237,35 @@ def display_announcements(db):
         </p>
         """
         st.markdown(announcement_html, unsafe_allow_html=True)
+        
+        # Show search snippet if search term is provided and content exists
+        if search_term.strip() and content:
+            # Find the search term in the content (case-insensitive)
+            import re
+            search_pattern = re.compile(re.escape(search_term), re.IGNORECASE)
+            match = search_pattern.search(content)
+            
+            if match:
+                # Extract snippet around the match
+                start_pos = max(0, match.start() - 100)  # 100 chars before match
+                end_pos = min(len(content), match.end() + 100)  # 100 chars after match
+                snippet = content[start_pos:end_pos]
+                
+                # Add ellipsis if we truncated
+                if start_pos > 0:
+                    snippet = "..." + snippet
+                if end_pos < len(content):
+                    snippet = snippet + "..."
+                
+                # Highlight the search term in the snippet
+                highlighted_snippet = search_pattern.sub(f"<mark style='background-color: yellow; padding: 2px;'>{search_term}</mark>", snippet)
+                
+                st.markdown(f"""
+                <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #ff6b6b;">
+                    <strong>🔍 Search Match:</strong><br/>
+                    <em>{highlighted_snippet}</em>
+                </div>
+                """, unsafe_allow_html=True)
 
         # LLM Response Section - only show selected categories
         if ann.get("llm_response"):
