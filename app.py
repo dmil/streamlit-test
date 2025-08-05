@@ -2,6 +2,7 @@
 """
 Simple Streamlit front-end to display announcements from MongoDB.
 Shows title, school, date, URL, and source base URL for each announcement.
+OPTIMIZED VERSION with fast pagination using MongoDB skip/limit.
 """
 import os
 from datetime import datetime, timezone
@@ -40,38 +41,37 @@ def utc_to_local(utc_dt):
     local_dt = utc_dt.astimezone(local_tz)
     return local_dt
 
-# Connect to MongoDB
+# Connect to MongoDB with connection pooling
+@st.cache_resource
 def get_db():
-    client = MongoClient(MONGO_URI)
+    client = MongoClient(MONGO_URI, maxPoolSize=10)
     return client[DB_NAME]
 
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def get_filtered_count(mongo_uri, db_name, query_str):
+    """Get count of documents matching query - cached for performance"""
+    import json
+    client = MongoClient(mongo_uri)
+    db = client[db_name]
+    query = json.loads(query_str)
+    return db.articles.count_documents(query)
+
+@st.cache_data(ttl=60)  # Cache for 1 minute  
+def get_schools_list(mongo_uri, db_name):
+    """Get list of schools - cached for performance"""
+    client = MongoClient(mongo_uri)
+    db = client[db_name]
+    schools_cursor = db.orgs.find({}, {"_id": 0, "name": 1})
+    return [{"name": org.get("name")} for org in schools_cursor]
 
 def display_announcements(db):
-    """Display the announcements view."""
+    """Display the announcements view with optimized pagination."""
     st.markdown('⚠️ Please note that this is an unedited **first draft** proof-of-concept. Classifications **WILL BE** inaccurate. ⚠️', unsafe_allow_html=True)
 
-    # Fetch all unique schools from the database
-    schools_cursor = db.orgs.find({}, {"_id": 0, "name": 1})
-    schools = [{"name": org.get("name")} for org in schools_cursor]
+    # Use cached schools list
+    schools = get_schools_list(MONGO_URI, DB_NAME)
 
     st.markdown('>_Check any box to filter for items identified by our LLM as related to that category.<br/>Hover on each question mark for more information about the criteria._', unsafe_allow_html=True)
-
-    # Add Clear All Filters button
-    # col_clear, col_space = st.columns([1, 4])
-    # with col_clear:
-    #     if st.button("🗑️ Clear All Filters", help="Reset all category filters"):
-    #         # Clear all filter states by removing them from session state
-    #         filter_keys = [
-    #             'show_govt_related_ann', 
-    #             # 'show_govt_supportive_ann', 'show_govt_opposing_ann',
-    #             'show_lawsuit_related_ann', 'show_funding_related_ann', 'show_protest_related_ann',
-    #             'show_layoff_related_ann', 'show_president_related_ann', 'show_provost_related_ann',
-    #             'show_faculty_related_ann', 'show_trustees_related_ann', 'show_trump_related_ann'
-    #         ]
-    #         for key in filter_keys:
-    #             if key in st.session_state:
-    #                 del st.session_state[key]
-    #         st.rerun()
 
     # Create a columns layout for the checkboxes (4 columns with 3 checkboxes each)
     col1, col2, col3 = st.columns(3)
@@ -80,12 +80,6 @@ def display_announcements(db):
         show_govt_related = st.checkbox("👨‍⚖️ Government Related", 
             key="show_govt_related_ann",
             help="LLM Prompt: Items where the university is responding to federal government or administration actions")
-        # show_govt_supportive = st.checkbox("🤝 Government Supportive", 
-        #     key="show_govt_supportive_ann",
-        #     help="LLM Prompt: Items where the university praises or emphasizes cooperation with the federal government")
-        # show_govt_opposing = st.checkbox("👎 Government Opposing", 
-        #     key="show_govt_opposing_ann",
-        #     help="LLM Prompt: Items where the announcement opposes or criticizes federal government actions")
         show_lawsuit_related = st.checkbox("⚖️ Lawsuit Related", 
             key="show_lawsuit_related_ann",
             help="LLM Prompt: Items mentioning lawsuits or legal actions related to the university")
@@ -135,10 +129,6 @@ def display_announcements(db):
     filter_conditions = []
     if show_govt_related:
         filter_conditions.append({"llm_response.government_related.related": True})
-    # if show_govt_supportive:
-    #     filter_conditions.append({"llm_response.government_supportive.related": True})
-    # if show_govt_opposing:
-    #     filter_conditions.append({"llm_response.government_opposing.related": True})
     if show_lawsuit_related:
         filter_conditions.append({"llm_response.lawsuit_related.related": True})
     if show_funding_related:
@@ -169,27 +159,49 @@ def display_announcements(db):
     if search_term.strip():
         query["content"] = {"$regex": search_term, "$options": "i"}
 
-    # Fetch announcements for current page (remove pagination here)
-    cursor = db.articles.find(query, {"_id": 0}).sort("date", -1)
-    announcements = list(cursor)
-    num_announcements = len(announcements)
+    # === CRITICAL OPTIMIZATION: Use cached count query ===
+    import json
+    query_str = json.dumps(query, default=str)  # Convert datetime to string for caching
+    num_announcements = get_filtered_count(MONGO_URI, DB_NAME, query_str)
 
     st.write(f"Number of announcements: **{num_announcements}** (from {start_date.strftime('%B %d, %Y')} onwards)")
     
+    # === PAGINATION LOGIC - OPTIMIZED ===
+    PAGE_SIZE = 20
+    total_pages = max((num_announcements - 1) // PAGE_SIZE + 1, 1)
     
+    # Initialize pagination state
+    if "ann_page" not in st.session_state:
+        st.session_state["ann_page"] = 0
+    
+    # Reset to page 0 when filters change
+    filter_state_key = f"{selected_school}_{show_govt_related}_{show_lawsuit_related}_{show_funding_related}_{show_protest_related}_{show_layoff_related}_{show_president_related}_{show_provost_related}_{show_faculty_related}_{show_trustees_related}_{show_trump_related}_{search_term}"
+    if "last_filter_state" not in st.session_state:
+        st.session_state["last_filter_state"] = filter_state_key
+    elif st.session_state["last_filter_state"] != filter_state_key:
+        st.session_state["ann_page"] = 0
+        st.session_state["last_filter_state"] = filter_state_key
+    
+    # Clamp page number if needed
+    st.session_state["ann_page"] = min(st.session_state["ann_page"], total_pages - 1)
     
     col_download, col_clear = st.columns([1, 3])
-    # Add download button for CSV
+    
+    # Add download button for CSV (only fetch all data when explicitly requested)
     with col_download:
-        if announcements:
-            # Create a download button
-            csv = convert_to_csv(announcements, db)
-            st.download_button(
-                label="📥 Download CSV",
-            data=csv,
-            file_name="announcements_data.csv",
-            mime="text/csv",
-        )
+        if num_announcements > 0:
+            if st.button("📥 Generate CSV", help="Click to generate and download CSV (may take a moment for large datasets)"):
+                # Only fetch all data when explicitly requested
+                with st.spinner("Generating CSV file..."):
+                    all_cursor = db.articles.find(query, {"_id": 0}).sort("date", -1)
+                    all_announcements = list(all_cursor)
+                    csv = convert_to_csv(all_announcements, db)
+                    st.download_button(
+                        label="📥 Download CSV",
+                        data=csv,
+                        file_name="announcements_data.csv",
+                        mime="text/csv",
+                    )
 
     with col_clear:
         if st.button("🗑️ Clear All Filters", help="Reset all category filters"):
@@ -200,16 +212,12 @@ def display_announcements(db):
                 </script>
             """, height=0)
 
-    # --- Pagination logic ---
-    PAGE_SIZE = 10
-    total_pages = max((num_announcements - 1) // PAGE_SIZE + 1, 1)
-    if "ann_page" not in st.session_state:
-        st.session_state["ann_page"] = 0
-    # Clamp page number if needed
-    st.session_state["ann_page"] = min(st.session_state["ann_page"], total_pages - 1)
+    # === CRITICAL OPTIMIZATION: Only fetch current page data ===
     start_idx = st.session_state["ann_page"] * PAGE_SIZE
-    end_idx = start_idx + PAGE_SIZE
-    paged_announcements = announcements[start_idx:end_idx]
+    
+    # Use MongoDB skip() and limit() for true pagination
+    cursor = db.articles.find(query, {"_id": 0}).sort("date", -1).skip(start_idx).limit(PAGE_SIZE)
+    paged_announcements = list(cursor)
 
     # Display announcements for current page
     for ann in paged_announcements:
@@ -329,18 +337,18 @@ def display_announcements(db):
 
         st.markdown("<hr style=\"margin-top:0.5em;margin-bottom:0.5em;\">", unsafe_allow_html=True)
 
-    # Pagination controls below announcements
+    # === OPTIMIZED PAGINATION CONTROLS ===
     col_prev, col_page, col_next = st.columns([1,2,1])
     with col_prev:
         if st.button("⬅️ Prev", key="ann_prev", disabled=st.session_state["ann_page"] == 0):
             st.session_state["ann_page"] = max(st.session_state["ann_page"] - 1, 0)
-            st.stop()
+            st.rerun()  # Use st.rerun() instead of st.stop()
     with col_page:
         st.markdown(f"<div style='text-align:center;'>Page <b>{st.session_state['ann_page']+1}</b> of <b>{total_pages}</b></div>", unsafe_allow_html=True)
     with col_next:
         if st.button("Next ➡️", key="ann_next", disabled=st.session_state["ann_page"] >= total_pages - 1):
             st.session_state["ann_page"] = min(st.session_state["ann_page"] + 1, total_pages - 1)
-            st.stop()
+            st.rerun()  # Use st.rerun() instead of st.stop()
 
 
 def convert_to_csv(announcements, db):
@@ -389,7 +397,7 @@ def convert_to_csv(announcements, db):
 
 
 def display_scraper_status(db):
-    """Display the scraper status tab."""
+    """Display the scraper status tab with health check."""
     st.markdown("### URLs")
     
     # Fetch all schools with scraper information
@@ -404,10 +412,10 @@ def display_scraper_status(db):
     
     # Count total scrapers
     total_scrapers = sum(len(school.get("scrapers", [])) for school in schools)
-    st.write(f"Total URLs: **{total_scrapers}** across **{len(schools)}** schools")
     
     # Create a list to hold all scrapers data
     all_scrapers_data = []
+    health_counts = {"healthy": 0, "unhealthy": 0}
     
     # Extract all scrapers from all schools into a flat list with school info
     for school in schools:
@@ -449,11 +457,58 @@ def display_scraper_status(db):
             # path number is the last digit of the path suffix if it exists
             path_number = path_suffix[-1] if path_suffix and path_suffix[-1].isdigit() else 1
 
+            # === HEALTH CHECK LOGIC ===
+            health_status = "❌ Unhealthy"
+            health_reason = "No recent activity"
+            
+            # Check if scraper ran recently and either:
+            # (1) got new things OR (2) the most recent thing it tried to get was already in the db
+            if last_run and isinstance(last_run, datetime):
+                # Calculate hours since last run
+                hours_since_run = (datetime.now(timezone.utc) - last_run).total_seconds() / 3600
+                
+                if hours_since_run <= 24:  # Ran within last 24 hours
+                    # Check condition 1: Got new things (last_nonempty_run is recent)
+                    got_new_content = False
+                    if last_nonempty_run and isinstance(last_nonempty_run, datetime):
+                        hours_since_content = (datetime.now(timezone.utc) - last_nonempty_run).total_seconds() / 3600
+                        if hours_since_content <= 168:  # Got content within last week
+                            got_new_content = True
+                    
+                    # Check condition 2: Most recent item already in DB (run count > nonempty count indicates duplicate detection)
+                    found_duplicates = False
+                    if (last_run_count > 0 and last_nonempty_run_count and 
+                        isinstance(last_nonempty_run_count, (int, float)) and 
+                        last_run_count > last_nonempty_run_count):
+                        found_duplicates = True
+                    
+                    # Health status based on conditions
+                    if got_new_content:
+                        health_status = "✅ Healthy"
+                        health_reason = "Found new content recently"
+                    elif found_duplicates:
+                        health_status = "✅ Healthy"
+                        health_reason = "Running & detecting existing content"
+                    else:
+                        health_status = "⚠️ Warning"
+                        health_reason = "Running but no new content found"
+                else:
+                    health_status = "❌ Unhealthy"
+                    health_reason = f"Last run {int(hours_since_run)}h ago"
+            
+            # Count for summary
+            if health_status == "✅ Healthy":
+                health_counts["healthy"] += 1
+            else:
+                health_counts["unhealthy"] += 1
+
             # Add to the list
             all_scrapers_data.append({
                 "School": school_name,
                 "Name": scraper.get("name", "").replace(" announcements", ""),
                 "Path": path_number,
+                "Health": health_status,
+                "Health Reason": health_reason,
                 "URL": scraper.get("url", "No URL"),
                 "Last Run": last_run_str,
                 "Last Run Count": last_run_count,
@@ -461,20 +516,50 @@ def display_scraper_status(db):
                 "Success Count": last_nonempty_run_count
             })
     
-    # Convert to DataFrame
-    df = pd.DataFrame(all_scrapers_data)\
-        .sort_values(by=["Last Success", "School", "Path"], ascending=[False, True, True])
+    # Display summary with health statistics
+    st.write(f"Total URLs: **{total_scrapers}** across **{len(schools)}** schools")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("✅ Healthy", health_counts["healthy"])
+    with col2:
+        st.metric("❌ Unhealthy", health_counts["unhealthy"])
+    with col3:
+        health_percentage = (health_counts["healthy"] / total_scrapers * 100) if total_scrapers > 0 else 0
+        st.metric("Health %", f"{health_percentage:.1f}%")
+    
+    # Convert to DataFrame and sort by health status (healthy first), then by school
+    df = pd.DataFrame(all_scrapers_data)
+    
+    # Create sort key: healthy items first, then by last success date
+    df['sort_key'] = df.apply(lambda row: (
+        0 if row['Health'] == "✅ Healthy" else 
+        1 if row['Health'] == "⚠️ Warning" else 2,
+        row['School'], 
+        row['Path']
+    ), axis=1)
+    
+    df = df.sort_values(by='sort_key').drop('sort_key', axis=1)
 
     # Ensure 'Path' column is string type for Arrow compatibility
     df["Path"] = df["Path"].astype(str)
 
-    # Use Streamlit's native dataframe
+    # Use Streamlit's native dataframe with health status column
     st.dataframe(
         df,
         use_container_width=True,
         hide_index=True,
         height=800,
         column_config={
+            "Health": st.column_config.TextColumn(
+                "Health Status",
+                help="✅ Healthy: Recently found content or detected duplicates | ⚠️ Warning: Running but no content | ❌ Unhealthy: Not running recently",
+                width="small"
+            ),
+            "Health Reason": st.column_config.TextColumn(
+                "Reason",
+                help="Explanation of health status"
+            ),
             "URL": st.column_config.LinkColumn(
                 "URL",
                 help="Source URL for the scraper",
