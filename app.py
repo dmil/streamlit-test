@@ -397,7 +397,7 @@ def convert_to_csv(announcements, db):
 
 
 def display_scraper_status(db):
-    """Display the scraper status tab."""
+    """Display the scraper status tab with health check."""
     st.markdown("### URLs")
     
     # Fetch all schools with scraper information
@@ -412,10 +412,10 @@ def display_scraper_status(db):
     
     # Count total scrapers
     total_scrapers = sum(len(school.get("scrapers", [])) for school in schools)
-    st.write(f"Total URLs: **{total_scrapers}** across **{len(schools)}** schools")
     
     # Create a list to hold all scrapers data
     all_scrapers_data = []
+    health_counts = {"healthy": 0, "unhealthy": 0}
     
     # Extract all scrapers from all schools into a flat list with school info
     for school in schools:
@@ -457,11 +457,58 @@ def display_scraper_status(db):
             # path number is the last digit of the path suffix if it exists
             path_number = path_suffix[-1] if path_suffix and path_suffix[-1].isdigit() else 1
 
+            # === HEALTH CHECK LOGIC ===
+            health_status = "❌ Unhealthy"
+            health_reason = "No recent activity"
+            
+            # Check if scraper ran recently and either:
+            # (1) got new things OR (2) the most recent thing it tried to get was already in the db
+            if last_run and isinstance(last_run, datetime):
+                # Calculate hours since last run
+                hours_since_run = (datetime.now(timezone.utc) - last_run).total_seconds() / 3600
+                
+                if hours_since_run <= 24:  # Ran within last 24 hours
+                    # Check condition 1: Got new things (last_nonempty_run is recent)
+                    got_new_content = False
+                    if last_nonempty_run and isinstance(last_nonempty_run, datetime):
+                        hours_since_content = (datetime.now(timezone.utc) - last_nonempty_run).total_seconds() / 3600
+                        if hours_since_content <= 168:  # Got content within last week
+                            got_new_content = True
+                    
+                    # Check condition 2: Most recent item already in DB (run count > nonempty count indicates duplicate detection)
+                    found_duplicates = False
+                    if (last_run_count > 0 and last_nonempty_run_count and 
+                        isinstance(last_nonempty_run_count, (int, float)) and 
+                        last_run_count > last_nonempty_run_count):
+                        found_duplicates = True
+                    
+                    # Health status based on conditions
+                    if got_new_content:
+                        health_status = "✅ Healthy"
+                        health_reason = "Found new content recently"
+                    elif found_duplicates:
+                        health_status = "✅ Healthy"
+                        health_reason = "Running & detecting existing content"
+                    else:
+                        health_status = "⚠️ Warning"
+                        health_reason = "Running but no new content found"
+                else:
+                    health_status = "❌ Unhealthy"
+                    health_reason = f"Last run {int(hours_since_run)}h ago"
+            
+            # Count for summary
+            if health_status == "✅ Healthy":
+                health_counts["healthy"] += 1
+            else:
+                health_counts["unhealthy"] += 1
+
             # Add to the list
             all_scrapers_data.append({
                 "School": school_name,
                 "Name": scraper.get("name", "").replace(" announcements", ""),
                 "Path": path_number,
+                "Health": health_status,
+                "Health Reason": health_reason,
                 "URL": scraper.get("url", "No URL"),
                 "Last Run": last_run_str,
                 "Last Run Count": last_run_count,
@@ -469,20 +516,50 @@ def display_scraper_status(db):
                 "Success Count": last_nonempty_run_count
             })
     
-    # Convert to DataFrame
-    df = pd.DataFrame(all_scrapers_data)\
-        .sort_values(by=["Last Success", "School", "Path"], ascending=[False, True, True])
+    # Display summary with health statistics
+    st.write(f"Total URLs: **{total_scrapers}** across **{len(schools)}** schools")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("✅ Healthy", health_counts["healthy"])
+    with col2:
+        st.metric("❌ Unhealthy", health_counts["unhealthy"])
+    with col3:
+        health_percentage = (health_counts["healthy"] / total_scrapers * 100) if total_scrapers > 0 else 0
+        st.metric("Health %", f"{health_percentage:.1f}%")
+    
+    # Convert to DataFrame and sort by health status (healthy first), then by school
+    df = pd.DataFrame(all_scrapers_data)
+    
+    # Create sort key: healthy items first, then by last success date
+    df['sort_key'] = df.apply(lambda row: (
+        0 if row['Health'] == "✅ Healthy" else 
+        1 if row['Health'] == "⚠️ Warning" else 2,
+        row['School'], 
+        row['Path']
+    ), axis=1)
+    
+    df = df.sort_values(by='sort_key').drop('sort_key', axis=1)
 
     # Ensure 'Path' column is string type for Arrow compatibility
     df["Path"] = df["Path"].astype(str)
 
-    # Use Streamlit's native dataframe
+    # Use Streamlit's native dataframe with health status column
     st.dataframe(
         df,
         use_container_width=True,
         hide_index=True,
         height=800,
         column_config={
+            "Health": st.column_config.TextColumn(
+                "Health Status",
+                help="✅ Healthy: Recently found content or detected duplicates | ⚠️ Warning: Running but no content | ❌ Unhealthy: Not running recently",
+                width="small"
+            ),
+            "Health Reason": st.column_config.TextColumn(
+                "Reason",
+                help="Explanation of health status"
+            ),
             "URL": st.column_config.LinkColumn(
                 "URL",
                 help="Source URL for the scraper",
