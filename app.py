@@ -54,33 +54,27 @@ def display_announcements(db):
     schools_cursor = db.orgs.find({}, {"_id": 0, "name": 1})
     schools = [{"name": org.get("name")} for org in schools_cursor]
 
-    # Create a dropdown for school selection with alphabetically sorted options
-    school_names = [school["name"] for school in schools]
-    school_names.sort()  # Sort school names alphabetically
-    school_options = ["All"] + school_names
-    selected_school = st.selectbox("Filter by School", school_options)
-
     st.markdown('>_Check any box to filter for items identified by our LLM as related to that category.<br/>Hover on each question mark for more information about the criteria._', unsafe_allow_html=True)
 
     # Add Clear All Filters button
-    col_clear, col_space = st.columns([1, 4])
-    with col_clear:
-        if st.button("🗑️ Clear All Filters", help="Reset all category filters"):
-            # Clear all filter states by removing them from session state
-            filter_keys = [
-                'show_govt_related_ann', 
-                # 'show_govt_supportive_ann', 'show_govt_opposing_ann',
-                'show_lawsuit_related_ann', 'show_funding_related_ann', 'show_protest_related_ann',
-                'show_layoff_related_ann', 'show_president_related_ann', 'show_provost_related_ann',
-                'show_faculty_related_ann', 'show_trustees_related_ann', 'show_trump_related_ann'
-            ]
-            for key in filter_keys:
-                if key in st.session_state:
-                    del st.session_state[key]
-            st.rerun()
+    # col_clear, col_space = st.columns([1, 4])
+    # with col_clear:
+    #     if st.button("🗑️ Clear All Filters", help="Reset all category filters"):
+    #         # Clear all filter states by removing them from session state
+    #         filter_keys = [
+    #             'show_govt_related_ann', 
+    #             # 'show_govt_supportive_ann', 'show_govt_opposing_ann',
+    #             'show_lawsuit_related_ann', 'show_funding_related_ann', 'show_protest_related_ann',
+    #             'show_layoff_related_ann', 'show_president_related_ann', 'show_provost_related_ann',
+    #             'show_faculty_related_ann', 'show_trustees_related_ann', 'show_trump_related_ann'
+    #         ]
+    #         for key in filter_keys:
+    #             if key in st.session_state:
+    #                 del st.session_state[key]
+    #         st.rerun()
 
     # Create a columns layout for the checkboxes (4 columns with 3 checkboxes each)
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         show_govt_related = st.checkbox("👨‍⚖️ Government Related", 
@@ -92,8 +86,6 @@ def display_announcements(db):
         # show_govt_opposing = st.checkbox("👎 Government Opposing", 
         #     key="show_govt_opposing_ann",
         #     help="LLM Prompt: Items where the announcement opposes or criticizes federal government actions")
-        
-    with col2:
         show_lawsuit_related = st.checkbox("⚖️ Lawsuit Related", 
             key="show_lawsuit_related_ann",
             help="LLM Prompt: Items mentioning lawsuits or legal actions related to the university")
@@ -104,7 +96,7 @@ def display_announcements(db):
             key="show_protest_related_ann",
             help="LLM Prompt: Items mentioning campus protests or disruptions")
 
-    with col3:
+    with col2:
         show_layoff_related = st.checkbox("✂️ Layoff Related", 
             key="show_layoff_related_ann",
             help="LLM Prompt: Items discussing layoffs, job cuts, staff reductions, or employment terminations")
@@ -114,20 +106,25 @@ def display_announcements(db):
         show_provost_related = st.checkbox("📚 Provost Related", 
             key="show_provost_related_ann",
             help="LLM Prompt: Items related to the provost of the school")
-
-    with col4:
         show_faculty_related = st.checkbox("👨‍🏫 Faculty Related", 
             key="show_faculty_related_ann",
             help="LLM Prompt: Items related to faculty members, faculty actions, or faculty governance")
+    with col3:
         show_trustees_related = st.checkbox("🏛️ Trustees Related", 
             key="show_trustees_related_ann",
             help="LLM Prompt: Items related to the board of trustees or trustee actions")
         show_trump_related = st.checkbox("🇺🇸 Trump Related", 
             key="show_trump_related_ann",
             help="LLM Prompt: Items related to Donald Trump (mentions, policies, reactions to Trump, etc.)")
-
+    
     # Add a text search bar for content search
-    search_term = st.text_input("🔍 Search announcement content", value="", help="Enter keywords to search announcement content (case-insensitive)")
+    search_term = st.text_input("🔍 Search announcement content", value="", key="search_term", help="Enter keywords to search announcement content (case-insensitive)")
+
+    # Create a dropdown for school selection with alphabetically sorted options
+    school_names = [school["name"] for school in schools]
+    school_names.sort()  # Sort school names alphabetically
+    school_options = ["All"] + school_names
+    selected_school = st.selectbox("Filter by School", school_options)
 
     # Build the query based on the selected school
     query = {}
@@ -179,16 +176,29 @@ def display_announcements(db):
 
     st.write(f"Number of announcements: **{num_announcements}** (from {start_date.strftime('%B %d, %Y')} onwards)")
     
+    
+    
+    col_download, col_clear = st.columns([1, 3])
     # Add download button for CSV
-    if announcements:
-        # Create a download button
-        csv = convert_to_csv(announcements, db)
-        st.download_button(
-            label="📥 Download data as CSV",
+    with col_download:
+        if announcements:
+            # Create a download button
+            csv = convert_to_csv(announcements, db)
+            st.download_button(
+                label="📥 Download CSV",
             data=csv,
             file_name="announcements_data.csv",
             mime="text/csv",
         )
+
+    with col_clear:
+        if st.button("🗑️ Clear All Filters", help="Reset all category filters"):
+            # Use JavaScript to refresh the page completely
+            st.components.v1.html("""
+                <script>
+                    window.parent.location.reload();
+                </script>
+            """, height=0)
 
     # --- Pagination logic ---
     PAGE_SIZE = 10
@@ -240,30 +250,39 @@ def display_announcements(db):
         
         # Show search snippet if search term is provided and content exists
         if search_term.strip() and content:
-            # Find the search term in the content (case-insensitive)
+            # Find all occurrences of the search term in the content (case-insensitive)
             import re
             search_pattern = re.compile(re.escape(search_term), re.IGNORECASE)
-            match = search_pattern.search(content)
+            matches = list(search_pattern.finditer(content))
             
-            if match:
-                # Extract snippet around the match
-                start_pos = max(0, match.start() - 100)  # 100 chars before match
-                end_pos = min(len(content), match.end() + 100)  # 100 chars after match
-                snippet = content[start_pos:end_pos]
+            if matches:
+                snippets = []
+                for i, match in enumerate(matches):
+                    # Extract snippet around each match
+                    start_pos = max(0, match.start() - 100)  # 100 chars before match
+                    end_pos = min(len(content), match.end() + 100)  # 100 chars after match
+                    snippet = content[start_pos:end_pos]
+                    
+                    # Add ellipsis if we truncated
+                    if start_pos > 0:
+                        snippet = "..." + snippet
+                    if end_pos < len(content):
+                        snippet = snippet + "..."
+                    
+                    # Highlight the search term in the snippet
+                    highlighted_snippet = search_pattern.sub(f"<mark style='background-color: yellow; padding: 2px;'>{search_term}</mark>", snippet)
+                    snippets.append(highlighted_snippet)
                 
-                # Add ellipsis if we truncated
-                if start_pos > 0:
-                    snippet = "..." + snippet
-                if end_pos < len(content):
-                    snippet = snippet + "..."
+                # Display all snippets
+                match_count = len(matches)
+                match_text = "match" if match_count == 1 else "matches"
                 
-                # Highlight the search term in the snippet
-                highlighted_snippet = search_pattern.sub(f"<mark style='background-color: yellow; padding: 2px;'>{search_term}</mark>", snippet)
+                snippets_html = "<br/><br/>".join([f"<strong>Match {i+1}:</strong><br/><em>{snippet}</em>" for i, snippet in enumerate(snippets)])
                 
                 st.markdown(f"""
                 <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #ff6b6b;">
-                    <strong>🔍 Search Match:</strong><br/>
-                    <em>{highlighted_snippet}</em>
+                    <strong>🔍 Search Results ({match_count} {match_text}):</strong><br/>
+                    {snippets_html}
                 </div>
                 """, unsafe_allow_html=True)
 
