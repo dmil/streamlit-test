@@ -473,6 +473,8 @@ def display_scraper_status(db):
                 
                 # Calculate hours since last run
                 hours_since_run = (current_time - last_run).total_seconds() / 3600
+                # Calculate hours since last run
+                hours_since_run = (datetime.now(timezone.utc) - last_run).total_seconds() / 3600
                 
                 if hours_since_run <= 24:  # Ran within last 24 hours
                     # Check condition 1: Got new things (last_nonempty_run is recent)
@@ -483,6 +485,8 @@ def display_scraper_status(db):
                             last_nonempty_run = last_nonempty_run.replace(tzinfo=timezone.utc)
                         
                         hours_since_content = (current_time - last_nonempty_run).total_seconds() / 3600
+
+                        hours_since_content = (datetime.now(timezone.utc) - last_nonempty_run).total_seconds() / 3600
                         if hours_since_content <= 168:  # Got content within last week
                             got_new_content = True
                     
