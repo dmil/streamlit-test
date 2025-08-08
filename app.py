@@ -1,8 +1,6 @@
-#!/usr/bin/env python3
+##!/usr/bin/env python3
 """
 Simple Streamlit front-end to display announcements from MongoDB.
-Shows title, school, date, URL, and source base URL for each announcement.
-OPTIMIZED VERSION with fast pagination using MongoDB skip/limit.
 """
 import os
 from datetime import datetime, timezone
@@ -23,7 +21,7 @@ MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME", "campus_data")
 
 # Define the start date for filtering announcements
-start_date = datetime(2025, 1, 1)
+start_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
 
 # Function to convert UTC datetime to local time
 def utc_to_local(utc_dt):
