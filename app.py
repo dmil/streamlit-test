@@ -464,14 +464,25 @@ def display_scraper_status(db):
             # Check if scraper ran recently and either:
             # (1) got new things OR (2) the most recent thing it tried to get was already in the db
             if last_run and isinstance(last_run, datetime):
+                # FIXED: Handle timezone-naive datetime from database
+                current_time = datetime.now(timezone.utc)
+                
+                # Make last_run timezone-aware if it's naive (assume UTC)
+                if last_run.tzinfo is None:
+                    last_run = last_run.replace(tzinfo=timezone.utc)
+                
                 # Calculate hours since last run
-                hours_since_run = (datetime.now(timezone.utc) - last_run).total_seconds() / 3600
+                hours_since_run = (current_time - last_run).total_seconds() / 3600
                 
                 if hours_since_run <= 24:  # Ran within last 24 hours
                     # Check condition 1: Got new things (last_nonempty_run is recent)
                     got_new_content = False
                     if last_nonempty_run and isinstance(last_nonempty_run, datetime):
-                        hours_since_content = (datetime.now(timezone.utc) - last_nonempty_run).total_seconds() / 3600
+                        # Handle timezone-naive datetime for last_nonempty_run too
+                        if last_nonempty_run.tzinfo is None:
+                            last_nonempty_run = last_nonempty_run.replace(tzinfo=timezone.utc)
+                        
+                        hours_since_content = (current_time - last_nonempty_run).total_seconds() / 3600
                         if hours_since_content <= 168:  # Got content within last week
                             got_new_content = True
                     
