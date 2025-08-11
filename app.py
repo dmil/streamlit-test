@@ -701,8 +701,7 @@ def display_scraper_status(db):
     # FIXED: Create separate sort columns instead of tuples
     df['health_priority'] = df['Health'].map({
         "✅ Healthy": 0,
-        "⚠️ Warning": 1,
-        "❌ Unhealthy": 2
+        "❌ Unhealthy": 1
     })
 
     # Sort by multiple columns separately
