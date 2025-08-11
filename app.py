@@ -693,6 +693,7 @@ def display_scraper_status(db):
     df = pd.DataFrame(all_scrapers_data)
     
 
+
     # SIMPLIFIED: Create sort columns for only healthy/unhealthy
     df['health_priority'] = df['Health'].map({
         "✅ Healthy": 0,
