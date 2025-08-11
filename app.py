@@ -1,15 +1,15 @@
-##!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Simple Streamlit front-end to display announcements from MongoDB.
 
 Shows title, school, date, URL, and source base URL for each announcement.
 OPTIMIZED VERSION with fast pagination using MongoDB skip/limit.
-UPDATED: Simplified health checks and Slack notifications for failed scrapers.
+UPDATED: Simplified health checks and automated daily Slack notifications for failed scrapers.
 """
 
 import os
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import streamlit as st
 from pymongo import MongoClient
 import pandas as pd
@@ -69,7 +69,7 @@ def get_schools_list(mongo_uri, db_name):
     schools_cursor = db.orgs.find({}, {"_id": 0, "name": 1})
     return [{"name": org.get("name")} for org in schools_cursor]
 
-def send_slack_notification(failed_scrapers):
+def send_slack_notification(failed_scrapers, is_daily_report=False):
     """Send Slack notification for completely failed scrapers"""
     if not SLACK_WEBHOOK_URL or not failed_scrapers:
         return False
@@ -77,7 +77,12 @@ def send_slack_notification(failed_scrapers):
     failed_count = len(failed_scrapers)
     
     # Build the message
-    message = f"🚨 *{failed_count} Campus Scraper{'s' if failed_count != 1 else ''} Failed*\n\n"
+    if is_daily_report:
+        message = f"📊 *Daily Scraper Report: {failed_count} Failed*\n\n"
+        username = "Campus Scraper Daily Report"
+    else:
+        message = f"🚨 *{failed_count} Campus Scraper{'s' if failed_count != 1 else ''} Failed*\n\n"
+        username = "Campus Scraper Monitor"
     
     for scraper in failed_scrapers:
         school = scraper['School']
@@ -93,8 +98,8 @@ def send_slack_notification(failed_scrapers):
     
     payload = {
         "text": message,
-        "username": "Campus Scraper Monitor",
-        "icon_emoji": ":warning:"
+        "username": username,
+        "icon_emoji": ":warning:" if not is_daily_report else ":clipboard:"
     }
     
     try:
@@ -103,6 +108,109 @@ def send_slack_notification(failed_scrapers):
     except Exception as e:
         print(f"❌ Error sending Slack notification: {e}")
         return False
+
+def check_and_send_daily_report(db):
+    """Check for failed scrapers and send daily report if needed"""
+    # Check if we've already sent a report today
+    today = datetime.now(timezone.utc).date()
+    
+    # Try to get the last report date from a tracking collection
+    try:
+        last_report = db.slack_reports.find_one({"type": "daily_scraper_report"})
+        if last_report and last_report.get("date"):
+            last_report_date = last_report["date"]
+            if isinstance(last_report_date, datetime):
+                last_report_date = last_report_date.date()
+            elif isinstance(last_report_date, str):
+                last_report_date = datetime.fromisoformat(last_report_date).date()
+            
+            # If we already sent a report today, skip
+            if last_report_date >= today:
+                return False, "Already sent today"
+    except Exception as e:
+        print(f"Error checking last report date: {e}")
+    
+    # Get failed scrapers using same logic as display function
+    schools = list(db.orgs.find({"scrapers": {"$exists": True}}, {"name": 1, "scrapers": 1}))
+    failed_scrapers = []
+    
+    for school in schools:
+        school_name = school.get("name", "Unknown School")
+        scrapers = school.get("scrapers", [])
+        
+        for scraper in scrapers:
+            last_run = scraper.get("last_run")
+            
+            # Same simplified health check logic
+            health_status = "❌ Unhealthy"
+            health_reason = "No recent activity"
+            
+            if last_run and isinstance(last_run, datetime):
+                current_time = datetime.now(timezone.utc)
+                
+                if last_run.tzinfo is None:
+                    last_run = last_run.replace(tzinfo=timezone.utc)
+                
+                hours_since_run = (current_time - last_run).total_seconds() / 3600
+                
+                if hours_since_run <= 24:
+                    health_status = "✅ Healthy"
+                    health_reason = "Running normally"
+                else:
+                    health_status = "❌ Unhealthy"
+                    health_reason = f"Last run {int(hours_since_run)}h ago"
+            else:
+                health_status = "❌ Unhealthy"
+                health_reason = "No run data available"
+            
+            # Add to failed list if unhealthy
+            if health_status == "❌ Unhealthy":
+                failed_scrapers.append({
+                    "School": school_name,
+                    "Name": scraper.get("name", "").replace(" announcements", ""),
+                    "Health Reason": health_reason,
+                    "URL": scraper.get("url", "No URL")
+                })
+    
+    # Send notification if there are failures
+    if failed_scrapers:
+        success = send_slack_notification(failed_scrapers, is_daily_report=True)
+        if success:
+            # Record that we sent a report today
+            try:
+                db.slack_reports.replace_one(
+                    {"type": "daily_scraper_report"},
+                    {
+                        "type": "daily_scraper_report",
+                        "date": datetime.now(timezone.utc),
+                        "failed_count": len(failed_scrapers),
+                        "scrapers": failed_scrapers
+                    },
+                    upsert=True
+                )
+            except Exception as e:
+                print(f"Error recording report date: {e}")
+            
+            return True, f"Sent daily report for {len(failed_scrapers)} failed scrapers"
+        else:
+            return False, "Failed to send daily report"
+    else:
+        # Record that we checked today (even with no failures)
+        try:
+            db.slack_reports.replace_one(
+                {"type": "daily_scraper_report"},
+                {
+                    "type": "daily_scraper_report", 
+                    "date": datetime.now(timezone.utc),
+                    "failed_count": 0,
+                    "scrapers": []
+                },
+                upsert=True
+            )
+        except Exception as e:
+            print(f"Error recording report date: {e}")
+        
+        return True, "All scrapers healthy - no notification needed"
 
 def display_announcements(db):
     """Display the announcements view with optimized pagination."""
@@ -440,6 +548,18 @@ def display_scraper_status(db):
     """Display the scraper status tab with SIMPLIFIED health check."""
     st.markdown("### URLs")
     
+    # === AUTO-CHECK FOR DAILY REPORT ===
+    # Check and potentially send daily report when this tab is loaded
+    if SLACK_WEBHOOK_URL:
+        try:
+            sent, message = check_and_send_daily_report(db)
+            if sent and "failed scrapers" in message:
+                st.info(f"📊 {message}")
+            elif sent and "healthy" in message:
+                st.success(f"✅ {message}")
+        except Exception as e:
+            st.warning(f"⚠️ Daily report check failed: {e}")
+    
     # Fetch all schools with scraper information
     schools = list(db.orgs.find(
         {"scrapers": {"$exists": True}}, 
@@ -512,42 +632,8 @@ def display_scraper_status(db):
                 hours_since_run = (current_time - last_run).total_seconds() / 3600
                 
                 if hours_since_run <= 24:  # Ran within last 24 hours
-<<<<<<< HEAD
                     health_status = "✅ Healthy"
                     health_reason = "Running normally"
-=======
-                    # Check condition 1: Got new things (last_nonempty_run is recent)
-                    got_new_content = False
-                    if last_nonempty_run and isinstance(last_nonempty_run, datetime):
-                        # Handle timezone-naive datetime for last_nonempty_run too
-                        if last_nonempty_run.tzinfo is None:
-                            last_nonempty_run = last_nonempty_run.replace(tzinfo=timezone.utc)
-                        
-                        hours_since_content = (current_time - last_nonempty_run).total_seconds() / 3600
-
-
-                        hours_since_content = (datetime.now(timezone.utc) - last_nonempty_run).total_seconds() / 3600
-                        if hours_since_content <= 168:  # Got content within last week
-                            got_new_content = True
-                    
-                    # Check condition 2: Most recent item already in DB (run count > nonempty count indicates duplicate detection)
-                    found_duplicates = False
-                    if (last_run_count > 0 and last_nonempty_run_count and 
-                        isinstance(last_nonempty_run_count, (int, float)) and 
-                        last_run_count > last_nonempty_run_count):
-                        found_duplicates = True
-                    
-                    # Health status based on conditions
-                    if got_new_content:
-                        health_status = "✅ Healthy"
-                        health_reason = "Found new content recently"
-                    elif found_duplicates:
-                        health_status = "✅ Healthy"
-                        health_reason = "Running & detecting existing content"
-                    else:
-                        health_status = "⚠️ Warning"
-                        health_reason = "Running but no new content found"
->>>>>>> 4224c1db70b4af1ed5cf14a26f125b63da366840
                 else:
                     health_status = "❌ Unhealthy"
                     health_reason = f"Last run {int(hours_since_run)}h ago"
@@ -594,12 +680,12 @@ def display_scraper_status(db):
         health_percentage = (health_counts["healthy"] / total_scrapers * 100) if total_scrapers > 0 else 0
         st.metric("Health %", f"{health_percentage:.1f}%")
     with col4:
-        # Add Slack notification button
-        if failed_scrapers and st.button("📢 Send Slack Alert", help=f"Send notification about {len(failed_scrapers)} failed scrapers"):
+        # Manual Slack notification button (in addition to daily auto-reports)
+        if failed_scrapers and st.button("📢 Send Manual Alert", help=f"Send immediate notification about {len(failed_scrapers)} failed scrapers"):
             with st.spinner("Sending Slack notification..."):
-                success = send_slack_notification(failed_scrapers)
+                success = send_slack_notification(failed_scrapers, is_daily_report=False)
                 if success:
-                    st.success(f"✅ Slack notification sent for {len(failed_scrapers)} failed scrapers")
+                    st.success(f"✅ Manual Slack notification sent for {len(failed_scrapers)} failed scrapers")
                 else:
                     st.error("❌ Failed to send Slack notification")
     
