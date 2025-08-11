@@ -1,4 +1,4 @@
-##!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Simple Streamlit front-end to display announcements from MongoDB.
 
@@ -475,8 +475,6 @@ def display_scraper_status(db):
                 
                 # Calculate hours since last run
                 hours_since_run = (current_time - last_run).total_seconds() / 3600
-                # Calculate hours since last run
-                hours_since_run = (datetime.now(timezone.utc) - last_run).total_seconds() / 3600
                 
                 if hours_since_run <= 24:  # Ran within last 24 hours
                     # Check condition 1: Got new things (last_nonempty_run is recent)
@@ -487,9 +485,6 @@ def display_scraper_status(db):
                             last_nonempty_run = last_nonempty_run.replace(tzinfo=timezone.utc)
                         
                         hours_since_content = (current_time - last_nonempty_run).total_seconds() / 3600
-
-
-                        hours_since_content = (datetime.now(timezone.utc) - last_nonempty_run).total_seconds() / 3600
                         if hours_since_content <= 168:  # Got content within last week
                             got_new_content = True
                     
@@ -549,15 +544,15 @@ def display_scraper_status(db):
     # Convert to DataFrame and sort by health status (healthy first), then by school
     df = pd.DataFrame(all_scrapers_data)
     
-    # Create sort key: healthy items first, then by last success date
-    df['sort_key'] = df.apply(lambda row: (
-        0 if row['Health'] == "✅ Healthy" else 
-        1 if row['Health'] == "⚠️ Warning" else 2,
-        row['School'], 
-        row['Path']
-    ), axis=1)
-    
-    df = df.sort_values(by='sort_key').drop('sort_key', axis=1)
+    # FIXED: Create separate sort columns instead of tuples
+    df['health_priority'] = df['Health'].map({
+        "✅ Healthy": 0,
+        "⚠️ Warning": 1,
+        "❌ Unhealthy": 2
+    })
+
+    # Sort by multiple columns separately
+    df = df.sort_values(by=['health_priority', 'School', 'Path']).drop('health_priority', axis=1)
 
     # Ensure 'Path' column is string type for Arrow compatibility
     df["Path"] = df["Path"].astype(str)
