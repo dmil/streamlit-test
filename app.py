@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+##!/usr/bin/env python3
 """
 Simple Streamlit front-end to display announcements from MongoDB.
 
@@ -512,8 +512,42 @@ def display_scraper_status(db):
                 hours_since_run = (current_time - last_run).total_seconds() / 3600
                 
                 if hours_since_run <= 24:  # Ran within last 24 hours
+<<<<<<< HEAD
                     health_status = "✅ Healthy"
                     health_reason = "Running normally"
+=======
+                    # Check condition 1: Got new things (last_nonempty_run is recent)
+                    got_new_content = False
+                    if last_nonempty_run and isinstance(last_nonempty_run, datetime):
+                        # Handle timezone-naive datetime for last_nonempty_run too
+                        if last_nonempty_run.tzinfo is None:
+                            last_nonempty_run = last_nonempty_run.replace(tzinfo=timezone.utc)
+                        
+                        hours_since_content = (current_time - last_nonempty_run).total_seconds() / 3600
+
+
+                        hours_since_content = (datetime.now(timezone.utc) - last_nonempty_run).total_seconds() / 3600
+                        if hours_since_content <= 168:  # Got content within last week
+                            got_new_content = True
+                    
+                    # Check condition 2: Most recent item already in DB (run count > nonempty count indicates duplicate detection)
+                    found_duplicates = False
+                    if (last_run_count > 0 and last_nonempty_run_count and 
+                        isinstance(last_nonempty_run_count, (int, float)) and 
+                        last_run_count > last_nonempty_run_count):
+                        found_duplicates = True
+                    
+                    # Health status based on conditions
+                    if got_new_content:
+                        health_status = "✅ Healthy"
+                        health_reason = "Found new content recently"
+                    elif found_duplicates:
+                        health_status = "✅ Healthy"
+                        health_reason = "Running & detecting existing content"
+                    else:
+                        health_status = "⚠️ Warning"
+                        health_reason = "Running but no new content found"
+>>>>>>> 4224c1db70b4af1ed5cf14a26f125b63da366840
                 else:
                     health_status = "❌ Unhealthy"
                     health_reason = f"Last run {int(hours_since_run)}h ago"
