@@ -692,7 +692,13 @@ def display_scraper_status(db):
     # Convert to DataFrame and sort by health status (healthy first), then by school
     df = pd.DataFrame(all_scrapers_data)
     
+
     # SIMPLIFIED: Create sort columns for only healthy/unhealthy
+    df['health_priority'] = df['Health'].map({
+        "✅ Healthy": 0,
+        "❌ Unhealthy": 1
+
+    # FIXED: Create separate sort columns instead of tuples
     df['health_priority'] = df['Health'].map({
         "✅ Healthy": 0,
         "❌ Unhealthy": 1
