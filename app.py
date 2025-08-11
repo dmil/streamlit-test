@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+##!/usr/bin/env python3
 """
 Simple Streamlit front-end to display announcements from MongoDB.
 
@@ -485,6 +485,9 @@ def display_scraper_status(db):
                             last_nonempty_run = last_nonempty_run.replace(tzinfo=timezone.utc)
                         
                         hours_since_content = (current_time - last_nonempty_run).total_seconds() / 3600
+
+
+                        hours_since_content = (datetime.now(timezone.utc) - last_nonempty_run).total_seconds() / 3600
                         if hours_since_content <= 168:  # Got content within last week
                             got_new_content = True
                     
