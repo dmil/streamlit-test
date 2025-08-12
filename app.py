@@ -68,12 +68,12 @@ def get_organizations_data(mongo_uri, db_name):
     return list(orgs_cursor)
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
-def get_scraper_mapping(organizations_data):
+def get_scraper_mapping(_organizations_data):
     """Create mapping from scraper path to scraper info - cached"""
     scraper_mapping = {}
     scraper_types = set()
     
-    for org in organizations_data:
+    for org in _organizations_data:
         org_name = org.get("name", "Unknown School")
         org_color = org.get("color", "#000000")
         scrapers = org.get("scrapers", [])
@@ -94,10 +94,10 @@ def get_scraper_mapping(organizations_data):
     
     return scraper_mapping, sorted(list(scraper_types))
 
-def get_scraper_paths_by_type(organizations_data, scraper_type):
+def get_scraper_paths_by_type(_organizations_data, scraper_type):
     """Get all scraper paths that match a specific type name"""
     matching_paths = []
-    for org in organizations_data:
+    for org in _organizations_data:
         scrapers = org.get("scrapers", [])
         for scraper in scrapers:
             if scraper.get("name") == scraper_type:
@@ -146,7 +146,7 @@ def send_slack_notification(failed_scrapers, is_daily_report=False):
         print(f"❌ Error sending Slack notification: {e}")
         return False
 
-def check_and_send_daily_report(db, organizations_data):
+def check_and_send_daily_report(db, _organizations_data):
     """Check for failed scrapers and send daily report if needed"""
     # Check if we've already sent a report today
     today = datetime.now(timezone.utc).date()
@@ -170,7 +170,7 @@ def check_and_send_daily_report(db, organizations_data):
     # Get failed scrapers using optimized data
     failed_scrapers = []
     
-    for org in organizations_data:
+    for org in _organizations_data:
         school_name = org.get("name", "Unknown School")
         scrapers = org.get("scrapers", [])
         
