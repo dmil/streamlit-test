@@ -636,11 +636,10 @@ def display_scraper_status(db):
     # Create a list to hold all scrapers data
     all_scrapers_data = []
     health_counts = {"healthy": 0, "unhealthy": 0}
-<<<<<<< Updated upstream
     failed_scrapers = []  # For Slack notifications
     
     # Extract all scrapers from all schools into a flat list with school info
-    for school in schools:
+    for school in organizations_data:
         school_name = school.get("name", "Unknown School")
         scrapers = school.get("scrapers", [])
         
@@ -730,7 +729,7 @@ def display_scraper_status(db):
             })
     
     # Display summary with health statistics
-    st.write(f"Total URLs: **{total_scrapers}** across **{len(schools)}** schools")
+    st.write(f"Total URLs: **{total_scrapers}** across **{len(organizations_data)}** schools")
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -753,14 +752,7 @@ def display_scraper_status(db):
     # Convert to DataFrame and sort by health status (healthy first), then by school
     df = pd.DataFrame(all_scrapers_data)
     
-
-
-    # SIMPLIFIED: Create sort columns for only healthy/unhealthy
-    df['health_priority'] = df['Health'].map({
-        "✅ Healthy": 0,
-        "❌ Unhealthy": 1
-
-    # FIXED: Create separate sort columns instead of tuples
+    # Create sort columns for healthy/unhealthy status
     df['health_priority'] = df['Health'].map({
         "✅ Healthy": 0,
         "❌ Unhealthy": 1
@@ -795,33 +787,6 @@ def display_scraper_status(db):
             )
         }
     )
-
-def main():
-    # Set page config - MUST be the first Streamlit command
-    st.set_page_config(
-        page_title="Campus Announcements Tracker [DRAFT]",
-        page_icon="🎓",
-        layout="centered",
-        initial_sidebar_state="expanded",
-        menu_items={"About": "This is a draft version of the Campus Announcements Tracker."}
-    )
-    
-    st.title("Campus Announcements [ DRAFT]")
-    st.markdown("Announcements from the provosts' and presidents' offices at select universities.")
-
-    db = get_db()
-    
-    # Create tabs for different views
-    tab1, tab2, tab3 = st.tabs(["Announcements", "Schools", "URLs"])
-    
-    with tab1:
-        display_announcements(db)
-    
-    with tab2:
-        display_schools_summary(db)
-        
-    with tab3:
-        display_scraper_status(db)
 
 
 def display_schools_summary(db):
@@ -864,7 +829,7 @@ def display_schools_summary(db):
             
             date_value = latest_announcement.get("date")
             if isinstance(date_value, datetime):
-            # Convert UTC to local
+                # Convert UTC to local
                 local_date = utc_to_local(date_value)
                 latest_date = local_date.strftime("%Y-%m-%d")
                 sort_date = date_value  # Store actual datetime for sorting
@@ -875,7 +840,6 @@ def display_schools_summary(db):
         
         # Count total announcements for this school
         announcement_count = db.articles.count_documents({"org": school_name, "date": {"$gte": start_date}})
-        
         
         # Add data to the list
         schools_data.append({
@@ -895,9 +859,6 @@ def display_schools_summary(db):
     # Sort by 'Sort Date' in descending order (most recent first)
     df = df.sort_values(by="Sort Date", ascending=False)
     
-    # Add school colors as a background in the School column for visual distinction
-    # We'll use a separate column for display with Streamlit's native components
-    
     # Create a DataFrame with the columns we want to display
     display_df = pd.DataFrame({
         "School": [f"{school['School']}" for school in df.to_dict('records')],
@@ -914,7 +875,7 @@ def display_schools_summary(db):
     
     # Use st.dataframe with basic configuration
     st.dataframe(
-        display_df,#.drop(columns=['URL']),  # Exclude URL column from display as we've embedded the links
+        display_df,
         use_container_width=True,
         hide_index=True,
         height=800,
@@ -926,11 +887,35 @@ def display_schools_summary(db):
             )
         }
     )
+
+
+def main():
+    # Set page config - MUST be the first Streamlit command
+    st.set_page_config(
+        page_title="Campus Announcements Tracker [DRAFT]",
+        page_icon="🎓",
+        layout="centered",
+        initial_sidebar_state="expanded",
+        menu_items={"About": "This is a draft version of the Campus Announcements Tracker."}
+    )
     
+    st.title("Campus Announcements [DRAFT]")
+    st.markdown("Announcements from the provosts' and presidents' offices at select universities.")
+
+    db = get_db()
+    
+    # Create tabs for different views
+    tab1, tab2, tab3 = st.tabs(["Announcements", "Schools", "URLs"])
+    
+    with tab1:
+        display_announcements(db)
+    
+    with tab2:
+        display_schools_summary(db)
+        
+    with tab3:
+        display_scraper_status(db)
 
 
 if __name__ == "__main__":
     main()
-=======
-    failed_scrapers = []  # For
->>>>>>> Stashed changes
