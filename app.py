@@ -49,13 +49,13 @@ def get_db():
     client = MongoClient(MONGO_URI, maxPoolSize=10)
     return client[DB_NAME]
 
-@st.cache_data(ttl=300)
-def get_filtered_count(mongo_uri, db_name, query_str):
-    """Get count of documents matching query - cached for performance"""
-    client = MongoClient(mongo_uri)
-    db = client[db_name]
-    query = json.loads(query_str)
-    return db.articles.count_documents(query)
+def get_filtered_count(db, query):
+    """Get count of documents matching query - removed caching for real-time updates"""
+    try:
+        return db.articles.count_documents(query)
+    except Exception as e:
+        st.error(f"Error counting documents: {e}")
+        return 0
 
 @st.cache_data(ttl=60)
 def get_schools_list(mongo_uri, db_name):
@@ -304,30 +304,32 @@ def display_announcements(db):
     if search_term.strip():
         query["content"] = {"$regex": search_term, "$options": "i"}
 
-    # Use cached count query for performance
-    query_str = json.dumps(query, default=str)
-    num_announcements = get_filtered_count(MONGO_URI, DB_NAME, query_str)
+    # Get count without caching for real-time updates
+    num_announcements = get_filtered_count(db, query)
 
     st.write(f"Number of announcements: **{num_announcements}** (from {start_date.strftime('%B %d, %Y')} onwards)")
     
-    # Pagination logic - optimized
+    # Pagination logic - improved
     PAGE_SIZE = 20
-    total_pages = max((num_announcements - 1) // PAGE_SIZE + 1, 1)
+    total_pages = max((num_announcements - 1) // PAGE_SIZE + 1, 1) if num_announcements > 0 else 1
     
-    # Initialize pagination state
-    if "ann_page" not in st.session_state:
-        st.session_state["ann_page"] = 0
+    # Initialize pagination state with unique key based on filters
+    filter_state_key = f"{selected_school}_{show_govt_related}_{show_lawsuit_related}_{show_funding_related}_{show_protest_related}_{show_layoff_related}_{show_president_related}_{show_provost_related}_{show_faculty_related}_{show_trustees_related}_{show_trump_related}_{search_term}"
     
     # Reset to page 0 when filters change
-    filter_state_key = f"{selected_school}_{show_govt_related}_{show_lawsuit_related}_{show_funding_related}_{show_protest_related}_{show_layoff_related}_{show_president_related}_{show_provost_related}_{show_faculty_related}_{show_trustees_related}_{show_trump_related}_{search_term}"
     if "last_filter_state" not in st.session_state:
         st.session_state["last_filter_state"] = filter_state_key
+        st.session_state["ann_page"] = 0
     elif st.session_state["last_filter_state"] != filter_state_key:
         st.session_state["ann_page"] = 0
         st.session_state["last_filter_state"] = filter_state_key
     
+    # Initialize page if not exists
+    if "ann_page" not in st.session_state:
+        st.session_state["ann_page"] = 0
+    
     # Clamp page number if needed
-    st.session_state["ann_page"] = min(st.session_state["ann_page"], total_pages - 1)
+    st.session_state["ann_page"] = max(0, min(st.session_state["ann_page"], total_pages - 1))
     
     col_download, col_clear = st.columns([1, 3])
     
@@ -348,11 +350,11 @@ def display_announcements(db):
 
     with col_clear:
         if st.button("🗑️ Clear All Filters", help="Reset all category filters"):
-            st.components.v1.html("""
-                <script>
-                    window.parent.location.reload();
-                </script>
-            """, height=0)
+            # Clear session state and rerun
+            for key in list(st.session_state.keys()):
+                if key.startswith(('show_', 'search_term', 'ann_page', 'last_filter_state')):
+                    del st.session_state[key]
+            st.rerun()
 
     # Only fetch current page data for performance
     start_idx = st.session_state["ann_page"] * PAGE_SIZE
@@ -469,14 +471,17 @@ def display_announcements(db):
 
         st.markdown("<hr style=\"margin-top:0.5em;margin-bottom:0.5em;\">", unsafe_allow_html=True)
 
-    # Optimized pagination controls
+    # Improved pagination controls
     col_prev, col_page, col_next = st.columns([1,2,1])
+    
     with col_prev:
         if st.button("⬅️ Prev", key="ann_prev", disabled=st.session_state["ann_page"] == 0):
             st.session_state["ann_page"] = max(st.session_state["ann_page"] - 1, 0)
             st.rerun()
+    
     with col_page:
         st.markdown(f"<div style='text-align:center;'>Page <b>{st.session_state['ann_page']+1}</b> of <b>{total_pages}</b></div>", unsafe_allow_html=True)
+    
     with col_next:
         if st.button("Next ➡️", key="ann_next", disabled=st.session_state["ann_page"] >= total_pages - 1):
             st.session_state["ann_page"] = min(st.session_state["ann_page"] + 1, total_pages - 1)
