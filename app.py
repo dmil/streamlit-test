@@ -2,6 +2,7 @@
 """
 Simple Streamlit front-end to display announcements from MongoDB.
 Shows title, school, date, URL, and source base URL for each announcement.
+OPTIMIZED VERSION with scraper type filtering and performance improvements.
 """
 
 import os
@@ -45,25 +46,82 @@ def utc_to_local(utc_dt):
 
 @st.cache_resource
 def get_db():
-    """Connect to MongoDB with connection pooling"""
-    client = MongoClient(MONGO_URI, maxPoolSize=10)
+    """Connect to MongoDB with enhanced connection pooling"""
+    client = MongoClient(
+        MONGO_URI, 
+        maxPoolSize=50, 
+        minPoolSize=5, 
+        maxIdleTimeMS=30000,
+        serverSelectionTimeoutMS=5000,  # Faster timeout
+        connectTimeoutMS=5000,
+        socketTimeoutMS=5000
+    )
     return client[DB_NAME]
 
-def get_filtered_count(db, query):
-    """Get count of documents matching query - removed caching for real-time updates"""
+# PERFORMANCE OPTIMIZATION: Cache count queries for 60 seconds
+@st.cache_data(ttl=60)
+def get_filtered_count_cached(query_str):
+    """Get count of documents matching query - cached for performance"""
     try:
+        db = get_db()
+        query = eval(query_str)  # Convert string back to dict for caching
         return db.articles.count_documents(query)
     except Exception as e:
         st.error(f"Error counting documents: {e}")
         return 0
 
-@st.cache_data(ttl=60)
-def get_schools_list(mongo_uri, db_name):
-    """Get list of schools - cached for performance"""
+def get_filtered_count(db, query):
+    """Get count wrapper that uses caching"""
+    # Convert query dict to string for caching key
+    query_str = str(query)
+    return get_filtered_count_cached(query_str)
+
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def get_organizations_data(mongo_uri, db_name):
+    """Get all organizations data - cached for performance"""
     client = MongoClient(mongo_uri)
     db = client[db_name]
-    schools_cursor = db.orgs.find({}, {"_id": 0, "name": 1})
-    return [{"name": org.get("name")} for org in schools_cursor]
+    orgs_cursor = db.orgs.find({}, {"name": 1, "color": 1, "scrapers": 1})
+    return list(orgs_cursor)
+
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def get_scraper_mapping(organizations_data):
+    """Create mapping from scraper path to scraper info - cached"""
+    scraper_mapping = {}
+    scraper_types = set()
+    
+    for org in organizations_data:
+        org_name = org.get("name", "Unknown School")
+        org_color = org.get("color", "#000000")
+        scrapers = org.get("scrapers", [])
+        
+        for scraper in scrapers:
+            path = scraper.get("path", "")
+            name = scraper.get("name", "")
+            
+            if path:
+                scraper_mapping[path] = {
+                    "name": name,
+                    "org_name": org_name,
+                    "org_color": org_color
+                }
+            
+            if name:
+                scraper_types.add(name)
+    
+    return scraper_mapping, sorted(list(scraper_types))
+
+def get_scraper_paths_by_type(organizations_data, scraper_type):
+    """Get all scraper paths that match a specific type name"""
+    matching_paths = []
+    for org in organizations_data:
+        scrapers = org.get("scrapers", [])
+        for scraper in scrapers:
+            if scraper.get("name") == scraper_type:
+                path = scraper.get("path")
+                if path:
+                    matching_paths.append(path)
+    return matching_paths
 
 def send_slack_notification(failed_scrapers, is_daily_report=False):
     """Send Slack notification for completely failed scrapers"""
@@ -105,7 +163,7 @@ def send_slack_notification(failed_scrapers, is_daily_report=False):
         print(f"❌ Error sending Slack notification: {e}")
         return False
 
-def check_and_send_daily_report(db):
+def check_and_send_daily_report(db, organizations_data):
     """Check for failed scrapers and send daily report if needed"""
     # Check if we've already sent a report today
     today = datetime.now(timezone.utc).date()
@@ -126,13 +184,12 @@ def check_and_send_daily_report(db):
     except Exception as e:
         print(f"Error checking last report date: {e}")
     
-    # Get failed scrapers using same logic as display function
-    schools = list(db.orgs.find({"scrapers": {"$exists": True}}, {"name": 1, "scrapers": 1}))
+    # Get failed scrapers using optimized data
     failed_scrapers = []
     
-    for school in schools:
-        school_name = school.get("name", "Unknown School")
-        scrapers = school.get("scrapers", [])
+    for org in organizations_data:
+        school_name = org.get("name", "Unknown School")
+        scrapers = org.get("scrapers", [])
         
         for scraper in scrapers:
             last_run = scraper.get("last_run")
@@ -208,12 +265,43 @@ def check_and_send_daily_report(db):
         
         return True, "All scrapers healthy - no notification needed"
 
+# PERFORMANCE OPTIMIZATION: Cache paginated data
+@st.cache_data(ttl=120)  # Cache for 2 minutes
+def get_paginated_announcements(query_str, page, page_size):
+    """Get paginated announcements with caching"""
+    try:
+        db = get_db()
+        query = eval(query_str)  # Convert string back to dict
+        start_idx = page * page_size
+        
+        # Use MongoDB projection to only fetch needed fields for better performance
+        projection = {
+            "_id": 0,
+            "title": 1,
+            "org": 1, 
+            "date": 1,
+            "scraper": 1,
+            "url": 1,
+            "content": 1,
+            "llm_response": 1
+        }
+        
+        cursor = db.articles.find(query, projection).sort("date", -1).skip(start_idx).limit(page_size)
+        return list(cursor)
+    except Exception as e:
+        st.error(f"Error fetching announcements: {e}")
+        return []
+
 def display_announcements(db):
     """Display the announcements view with optimized pagination."""
     st.markdown('⚠️ Please note that this is an unedited **first draft** proof-of-concept. Classifications **WILL BE** inaccurate. ⚠️', unsafe_allow_html=True)
 
-    # Use cached schools list
-    schools = get_schools_list(MONGO_URI, DB_NAME)
+    # Get cached organizations data once
+    organizations_data = get_organizations_data(MONGO_URI, DB_NAME)
+    scraper_mapping, scraper_types = get_scraper_mapping(organizations_data)
+    
+    # Extract school names from organizations data
+    school_names = sorted([org["name"] for org in organizations_data])
 
     st.markdown('>_Check any box to filter for items identified by our LLM as related to that category.<br/>Hover on each question mark for more information about the criteria._', unsafe_allow_html=True)
 
@@ -259,16 +347,30 @@ def display_announcements(db):
     # Add a text search bar for content search
     search_term = st.text_input("🔍 Search announcement content", value="", key="search_term", help="Enter keywords to search announcement content (case-insensitive)")
 
-    # Create a dropdown for school selection with alphabetically sorted options
-    school_names = [school["name"] for school in schools]
-    school_names.sort()  # Sort school names alphabetically
-    school_options = ["All"] + school_names
-    selected_school = st.selectbox("Filter by School", school_options)
+    # Create two columns for filters
+    filter_col1, filter_col2 = st.columns(2)
+    
+    with filter_col1:
+        # Create a dropdown for school selection with alphabetically sorted options
+        school_options = ["All"] + school_names
+        selected_school = st.selectbox("Filter by School", school_options)
+    
+    with filter_col2:
+        # NEW: Create a dropdown for scraper type selection
+        scraper_type_options = ["All"] + scraper_types
+        selected_scraper_type = st.selectbox("Filter by Announcement Type", scraper_type_options, help="Filter by the type of announcements (e.g., provost, president, etc.)")
 
     # Build the query based on the selected school
     query = {}
     if selected_school != "All":
         query["org"] = selected_school
+
+    # NEW: Add scraper type filter to query
+    if selected_scraper_type != "All":
+        # Get all scraper paths that match the selected type
+        matching_paths = get_scraper_paths_by_type(organizations_data, selected_scraper_type)
+        if matching_paths:
+            query["scraper"] = {"$in": matching_paths}
 
     # Add filters based on selected categories
     filter_conditions = []
@@ -304,17 +406,17 @@ def display_announcements(db):
     if search_term.strip():
         query["content"] = {"$regex": search_term, "$options": "i"}
 
-    # Get count without caching for real-time updates
+    # Get count using cached version
     num_announcements = get_filtered_count(db, query)
 
-    st.write(f"Number of announcements: **{num_announcements}** (from {start_date.strftime('%B %d, %Y')} onwards)")
+    st.write(f"Number of announcements: **{num_announcements:,}** (from {start_date.strftime('%B %d, %Y')} onwards)")
     
-    # Pagination logic - improved
+    # Pagination logic - improved (UPDATED to include scraper type)
     PAGE_SIZE = 20
     total_pages = max((num_announcements - 1) // PAGE_SIZE + 1, 1) if num_announcements > 0 else 1
     
-    # Initialize pagination state with unique key based on filters
-    filter_state_key = f"{selected_school}_{show_govt_related}_{show_lawsuit_related}_{show_funding_related}_{show_protest_related}_{show_layoff_related}_{show_president_related}_{show_provost_related}_{show_faculty_related}_{show_trustees_related}_{show_trump_related}_{search_term}"
+    # Initialize pagination state with unique key based on filters (UPDATED)
+    filter_state_key = f"{selected_school}_{selected_scraper_type}_{show_govt_related}_{show_lawsuit_related}_{show_funding_related}_{show_protest_related}_{show_layoff_related}_{show_president_related}_{show_provost_related}_{show_faculty_related}_{show_trustees_related}_{show_trump_related}_{search_term}"
     
     # Reset to page 0 when filters change
     if "last_filter_state" not in st.session_state:
@@ -338,9 +440,10 @@ def display_announcements(db):
         if num_announcements > 0:
             if st.button("📥 Generate CSV", help="Click to generate and download CSV (may take a moment for large datasets)"):
                 with st.spinner("Generating CSV file..."):
+                    # For CSV generation, we need all data - use direct query without caching
                     all_cursor = db.articles.find(query, {"_id": 0}).sort("date", -1)
                     all_announcements = list(all_cursor)
-                    csv = convert_to_csv(all_announcements, db)
+                    csv = convert_to_csv(all_announcements, scraper_mapping)
                     st.download_button(
                         label="📥 Download CSV",
                         data=csv,
@@ -356,12 +459,9 @@ def display_announcements(db):
                     del st.session_state[key]
             st.rerun()
 
-    # Only fetch current page data for performance
-    start_idx = st.session_state["ann_page"] * PAGE_SIZE
-    
-    # Use MongoDB skip() and limit() for true pagination
-    cursor = db.articles.find(query, {"_id": 0}).sort("date", -1).skip(start_idx).limit(PAGE_SIZE)
-    paged_announcements = list(cursor)
+    # PERFORMANCE OPTIMIZATION: Use cached paginated data
+    query_str = str(query)  # Convert to string for caching
+    paged_announcements = get_paginated_announcements(query_str, st.session_state["ann_page"], PAGE_SIZE)
 
     # Display announcements for current page
     for ann in paged_announcements:
@@ -375,12 +475,16 @@ def display_announcements(db):
         else:
             date_str = str(date_value)
 
-        # Get school name and color
+        # OPTIMIZED: Get school info and scraper type using cached mapping
+        scraper_path = ann.get("scraper", "")
         school_name = ann.get("org", "Unknown School")
-        school_color = "#000000"  # Default to black if no color is found
-        school_doc = db.orgs.find_one({"name": school_name}, {"color": 1})
-        if school_doc and school_doc.get("color"):
-            school_color = school_doc["color"]
+        school_color = "#000000"  # Default
+        scraper_type_display = "Unknown Type"
+        
+        if scraper_path in scraper_mapping:
+            scraper_info = scraper_mapping[scraper_path]
+            scraper_type_display = scraper_info["name"]
+            school_color = scraper_info["org_color"]
 
         # Announcement URL
         url = ann.get("url", "")
@@ -390,6 +494,7 @@ def display_announcements(db):
         announcement_html = f"""
         <p style="margin-bottom: 0.5em;">
             <strong>School:</strong> <span style="background-color:{school_color}; padding:2px 4px; border-radius:4px; color:#ffffff;">{school_name}</span><br>
+            <strong>Type:</strong> {scraper_type_display}<br>
             <strong>Date:</strong> {date_str}<br>
             <strong>Content Scraped:</strong> {'✅' if content else '👎'}<br>
             <strong>Announcement URL:</strong><br/> <a href="{url}">{url}</a>
@@ -397,7 +502,7 @@ def display_announcements(db):
         """
         st.markdown(announcement_html, unsafe_allow_html=True)
         
-        # Show search snippet if search term is provided and content exists
+        # Show search snippet if search term is provided and content exists - FIXED STYLING FOR DARK MODE
         if search_term.strip() and content:
             import re
             search_pattern = re.compile(re.escape(search_term), re.IGNORECASE)
@@ -415,18 +520,18 @@ def display_announcements(db):
                     if end_pos < len(content):
                         snippet = snippet + "..."
                     
-                    highlighted_snippet = search_pattern.sub(f"<mark style='background-color: yellow; padding: 2px;'>{search_term}</mark>", snippet)
+                    highlighted_snippet = search_pattern.sub(f"<mark style='background-color: #ffeb3b; color: #000000; padding: 2px;'>{search_term}</mark>", snippet)
                     snippets.append(highlighted_snippet)
                 
                 match_count = len(matches)
                 match_text = "match" if match_count == 1 else "matches"
                 
-                snippets_html = "<br/><br/>".join([f"<strong>Match {i+1}:</strong><br/><em>{snippet}</em>" for i, snippet in enumerate(snippets)])
+                snippets_html = "<br/><br/>".join([f"<strong>Match {i+1}:</strong><br/><em style='color: inherit;'>{snippet}</em>" for i, snippet in enumerate(snippets)])
                 
                 st.markdown(f"""
-                <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #ff6b6b;">
-                    <strong>🔍 Search Results ({match_count} {match_text}):</strong><br/>
-                    {snippets_html}
+                <div style="background-color: rgba(255, 255, 255, 0.1); padding: 15px; border-radius: 8px; margin: 10px 0; border-left: 4px solid #ff6b6b; color: inherit;">
+                    <strong style="color: inherit;">🔍 Search Results ({match_count} {match_text}):</strong><br/>
+                    <div style="color: inherit;">{snippets_html}</div>
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -471,24 +576,28 @@ def display_announcements(db):
 
         st.markdown("<hr style=\"margin-top:0.5em;margin-bottom:0.5em;\">", unsafe_allow_html=True)
 
-    # Improved pagination controls
+    # FIXED pagination controls with proper state management
     col_prev, col_page, col_next = st.columns([1,2,1])
     
     with col_prev:
-        if st.button("⬅️ Prev", key="ann_prev", disabled=st.session_state["ann_page"] == 0):
-            st.session_state["ann_page"] = max(st.session_state["ann_page"] - 1, 0)
-            st.rerun()
+        prev_disabled = st.session_state["ann_page"] == 0
+        if st.button("⬅️ Prev", key="ann_prev", disabled=prev_disabled):
+            if st.session_state["ann_page"] > 0:
+                st.session_state["ann_page"] -= 1
+                st.rerun()
     
     with col_page:
         st.markdown(f"<div style='text-align:center;'>Page <b>{st.session_state['ann_page']+1}</b> of <b>{total_pages}</b></div>", unsafe_allow_html=True)
     
     with col_next:
-        if st.button("Next ➡️", key="ann_next", disabled=st.session_state["ann_page"] >= total_pages - 1):
-            st.session_state["ann_page"] = min(st.session_state["ann_page"] + 1, total_pages - 1)
-            st.rerun()
+        next_disabled = st.session_state["ann_page"] >= total_pages - 1
+        if st.button("Next ➡️", key="ann_next", disabled=next_disabled):
+            if st.session_state["ann_page"] < total_pages - 1:
+                st.session_state["ann_page"] += 1
+                st.rerun()
 
-def convert_to_csv(announcements, db):
-    """Convert announcements data to CSV format."""
+def convert_to_csv(announcements, scraper_mapping):
+    """Convert announcements data to CSV format using cached scraper mapping."""
     processed_data = []
     
     for ann in announcements:
@@ -498,6 +607,14 @@ def convert_to_csv(announcements, db):
             "date": ann.get("date"),
             "url": ann.get("url", ""),
         }
+        
+        # OPTIMIZED: Add scraper type information to CSV using cached mapping
+        scraper_path = ann.get("scraper", "")
+        scraper_type = "Unknown Type"
+        if scraper_path in scraper_mapping:
+            scraper_type = scraper_mapping[scraper_path]["name"]
+        
+        processed_ann["announcement_type"] = scraper_type
         
         # Add LLM response fields if available
         llm_response = ann.get("llm_response", {})
@@ -524,44 +641,18 @@ def convert_to_csv(announcements, db):
     df.to_csv(csv_buffer, index=False)
     return csv_buffer.getvalue()
 
-def display_scraper_status(db):
-    """Display the scraper status tab with SIMPLIFIED health check."""
-    st.markdown("### URLs")
-    
-    # === AUTO-CHECK FOR DAILY REPORT ===
-    # Check and potentially send daily report when this tab is loaded
-    if SLACK_WEBHOOK_URL:
-        try:
-            sent, message = check_and_send_daily_report(db)
-            if sent and "failed scrapers" in message:
-                st.info(f"📊 {message}")
-            elif sent and "healthy" in message:
-                st.success(f"✅ {message}")
-        except Exception as e:
-            st.warning(f"⚠️ Daily report check failed: {e}")
-    
-    # Fetch all schools with scraper information
-    schools = list(db.orgs.find(
-        {"scrapers": {"$exists": True}}, 
-        {"name": 1, "scrapers": 1, "last_run": 1}
-    ).sort("name", 1))
-    
-    if not schools:
-        st.warning("No scraper information found in the database.")
-        return
-    
-    # Count total scrapers
-    total_scrapers = sum(len(school.get("scrapers", [])) for school in schools)
-    
-    # Create a list to hold all scrapers data
+# PERFORMANCE OPTIMIZATION: Cache scraper status data
+@st.cache_data(ttl=60)  # Cache for 1 minute
+def get_scraper_status_data(organizations_data):
+    """Get processed scraper status data with caching"""
     all_scrapers_data = []
     health_counts = {"healthy": 0, "unhealthy": 0}
-    failed_scrapers = []  # For Slack notifications
+    failed_scrapers = []
     
     # Extract all scrapers from all schools into a flat list with school info
-    for school in schools:
-        school_name = school.get("name", "Unknown School")
-        scrapers = school.get("scrapers", [])
+    for org in organizations_data:
+        school_name = org.get("name", "Unknown School")
+        scrapers = org.get("scrapers", [])
         
         for scraper in scrapers:
             # Convert UTC last run date to local time and format it
@@ -572,20 +663,6 @@ def display_scraper_status(db):
             else:
                 last_run_str = "" if last_run is None else str(last_run)
                 
-            # Get last run count
-            last_run_count = scraper.get("last_run_count", 0)
-            
-            # Convert UTC last non-empty run date to local time and format it
-            last_nonempty_run = scraper.get("last_nonempty_run")
-            if isinstance(last_nonempty_run, datetime):
-                local_last_nonempty_run = utc_to_local(last_nonempty_run)
-                last_nonempty_run_str = local_last_nonempty_run.strftime("%Y-%m-%d %I:%M:%S %p")
-            else:
-                last_nonempty_run_str = "" if last_nonempty_run is None else str(last_nonempty_run)
-                
-            # Get last non-empty run count
-            last_nonempty_run_count = scraper.get("last_nonempty_run_count", "")
-            
             # Extract path suffix (everything after the last dot)
             path = scraper.get("path", "No path")
             if path != "No path":
@@ -634,7 +711,7 @@ def display_scraper_status(db):
                     "URL": scraper.get("url", "No URL")
                 })
 
-            # Add to the display list
+            # Add to the display list - REMOVED the problematic columns
             all_scrapers_data.append({
                 "School": school_name,
                 "Name": scraper.get("name", "").replace(" announcements", ""),
@@ -642,14 +719,42 @@ def display_scraper_status(db):
                 "Health": health_status,
                 "Health Reason": health_reason,
                 "URL": scraper.get("url", "No URL"),
-                "Last Run": last_run_str,
-                "Last Run Count": last_run_count,
-                "Last Success": last_nonempty_run_str,
-                "Success Count": last_nonempty_run_count
+                "Last Run": last_run_str
             })
     
+    return all_scrapers_data, health_counts, failed_scrapers
+
+def display_scraper_status(db):
+    """Display the scraper status tab with SIMPLIFIED health check."""
+    st.markdown("### URLs")
+    
+    # Get cached organizations data
+    organizations_data = get_organizations_data(MONGO_URI, DB_NAME)
+    
+    # === AUTO-CHECK FOR DAILY REPORT ===
+    # Check and potentially send daily report when this tab is loaded
+    if SLACK_WEBHOOK_URL:
+        try:
+            sent, message = check_and_send_daily_report(db, organizations_data)
+            if sent and "failed scrapers" in message:
+                st.info(f"📊 {message}")
+            elif sent and "healthy" in message:
+                st.success(f"✅ {message}")
+        except Exception as e:
+            st.warning(f"⚠️ Daily report check failed: {e}")
+    
+    if not organizations_data:
+        st.warning("No scraper information found in the database.")
+        return
+    
+    # Count total scrapers
+    total_scrapers = sum(len(org.get("scrapers", [])) for org in organizations_data)
+    
+    # PERFORMANCE OPTIMIZATION: Use cached scraper status data
+    all_scrapers_data, health_counts, failed_scrapers = get_scraper_status_data(organizations_data)
+    
     # Display summary with health statistics
-    st.write(f"Total URLs: **{total_scrapers}** across **{len(schools)}** schools")
+    st.write(f"Total URLs: **{total_scrapers}** across **{len(organizations_data)}** schools")
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -708,26 +813,21 @@ def display_scraper_status(db):
         }
     )
 
-def display_schools_summary(db):
-    """Display a summary table of all schools with their most recent announcements."""
-    st.markdown("### Schools Summary")
+# PERFORMANCE OPTIMIZATION: Cache schools summary data
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def get_schools_summary_data(mongo_uri, db_name, organizations_data, start_date):
+    """Get schools summary data with caching"""
+    client = MongoClient(mongo_uri)
+    db = client[db_name]
     
-    # Get all schools from the database
-    schools = list(db.orgs.find({}, {"name": 1, "color": 1, "scrapers": 1}).sort("name", 1))
-    
-    if not schools:
-        st.warning("No schools found in the database.")
-        return
-    
-    # Create a DataFrame to hold school information
     schools_data = []
     
-    for school in schools:
-        school_name = school.get("name", "Unknown School")
-        school_color = school.get("color", "#000000")
+    for org in organizations_data:
+        school_name = org.get("name", "Unknown School")
+        school_color = org.get("color", "#000000")
         
         # Count the number of scrapers
-        scrapers = school.get("scrapers", [])
+        scrapers = org.get("scrapers", [])
         scraper_count = len(scrapers)
         
         # Find the most recent announcement for this school
@@ -772,6 +872,22 @@ def display_schools_summary(db):
             "URL": latest_url
         })
     
+    return schools_data
+
+def display_schools_summary(db):
+    """Display a summary table of all schools with their most recent announcements."""
+    st.markdown("### Schools Summary")
+    
+    # Get cached organizations data
+    organizations_data = get_organizations_data(MONGO_URI, DB_NAME)
+    
+    if not organizations_data:
+        st.warning("No schools found in the database.")
+        return
+    
+    # PERFORMANCE OPTIMIZATION: Use cached schools summary data
+    schools_data = get_schools_summary_data(MONGO_URI, DB_NAME, organizations_data, start_date)
+    
     # Convert to DataFrame
     df = pd.DataFrame(schools_data)
     
@@ -789,8 +905,8 @@ def display_schools_summary(db):
     })
 
     # Add a note about the total number of schools
-    st.write(f"Total schools: **{len(schools)}**")
-    st.write(f"Total announcements (since {start_date.strftime('%B %d, %Y')}): **{df['Announcements'].sum()}**")
+    st.write(f"Total schools: **{len(organizations_data)}**")
+    st.write(f"Total announcements (since {start_date.strftime('%B %d, %Y')}): **{df['Announcements'].sum():,}**")
     
     # Use st.dataframe with basic configuration
     st.dataframe(
