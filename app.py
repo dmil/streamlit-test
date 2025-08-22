@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """
 Simple Streamlit front-end to display announcements from MongoDB.
@@ -190,78 +191,46 @@ def check_and_send_daily_report(db, _organizations_data):
     for org in _organizations_data:
         school_name = org.get("name", "Unknown School")
         scrapers = org.get("scrapers", [])
-        
-        for scraper in scrapers:
-            last_run = scraper.get("last_run")
-            
-            # Same simplified health check logic
-            health_status = "❌ Unhealthy"
-            health_reason = "No recent activity"
-            
-            if last_run and isinstance(last_run, datetime):
-                current_time = datetime.now(timezone.utc)
-                
-                if last_run.tzinfo is None:
-                    last_run = last_run.replace(tzinfo=timezone.utc)
-                
-                hours_since_run = (current_time - last_run).total_seconds() / 3600
-                
-                if hours_since_run <= 24:
-                    health_status = "✅ Healthy"
-                    health_reason = "Running normally"
-                else:
-                    health_status = "❌ Unhealthy"
-                    health_reason = f"Last run {int(hours_since_run)}h ago"
-            else:
-                health_status = "❌ Unhealthy"
-                health_reason = "No run data available"
-            
-            # Add to failed list if unhealthy
-            if health_status == "❌ Unhealthy":
-                failed_scrapers.append({
-                    "School": school_name,
-                    "Name": scraper.get("name", "").replace(" announcements", ""),
-                    "Health Reason": health_reason,
-                    "URL": scraper.get("url", "No URL")
-                })
     
-    # Send notification if there are failures
-    if failed_scrapers:
-        success = send_slack_notification(failed_scrapers, is_daily_report=True)
-        if success:
-            # Record that we sent a report today
-            try:
-                db.slack_reports.replace_one(
-                    {"type": "daily_scraper_report"},
-                    {
-                        "type": "daily_scraper_report",
-                        "date": datetime.now(timezone.utc),
-                        "failed_count": len(failed_scrapers),
-                        "scrapers": failed_scrapers
-                    },
-                    upsert=True
-                )
-            except Exception as e:
-                print(f"Error recording report date: {e}")
+    def process_scrape_data(self, videos, scrape_time):
+        """Process and append scrape data"""
+        # Create scrape record
+        scrape_record = {
+            'scrape_id': scrape_time.strftime('%Y%m%d_%H%M%S'),
+            'scraped_at': scrape_time.isoformat(),
+            'videos_found': len(videos),
+            'videos': []
+        }
+        
+        # Process each video
+        for video in videos:
+            video_id = video.get('id')
             
-            return True, f"Sent daily report for {len(failed_scrapers)} failed scrapers"
-        else:
-            return False, "Failed to send daily report"
-    else:
-        # Record that we checked today (even with no failures)
-        try:
-            db.slack_reports.replace_one(
-                {"type": "daily_scraper_report"},
-                {
-                    "type": "daily_scraper_report", 
-                    "date": datetime.now(timezone.utc),
-                    "failed_count": 0,
-                    "scrapers": []
-                },
-                upsert=True
-            )
-        except Exception as e:
-            print(f"Error recording report date: {e}")
+            # Add exact timestamp
+            video['exact_scrape_time'] = scrape_time.isoformat()
+            
+            # Track in video history
+            if video_id:
+                if video_id not in self.existing_data['video_history']:
+                    self.existing_data['video_history'][video_id] = {
+                        'first_seen': scrape_time.isoformat(),
+                        'description': video.get('description', ''),
+                        'metrics_history': []
+                    }
+                
+                # Add metrics snapshot
+                metrics_snapshot = {
+                    'timestamp': scrape_time.isoformat(),
+                    'views': video.get('views'),
+                    'likes': video.get('likes'),
+                    'comments': video.get('comments'),
+                    'shares': video.get('shares'),
+                    'bookmarks': video.get('bookmarks')
+                }
+                
+                self.existing_data['video_history'][video_id]['metrics_history'].append(metrics_snapshot)
+            
+            scrape_record['videos'].append(video)
         
         return True, "All scrapers healthy - no notification needed"
 
@@ -746,7 +715,6 @@ def display_scraper_status(db):
     if not organizations_data:
         st.warning("No scraper information found in the database.")
         return
-    
     # Count total scrapers
     total_scrapers = sum(len(org.get("scrapers", [])) for org in organizations_data)
     
@@ -819,7 +787,6 @@ def get_schools_summary_data(mongo_uri, db_name, _organizations_data, start_date
     """Get schools summary data with caching"""
     client = MongoClient(mongo_uri)
     db = client[db_name]
-    
     schools_data = []
     
     for org in _organizations_data:
@@ -829,36 +796,60 @@ def get_schools_summary_data(mongo_uri, db_name, _organizations_data, start_date
         # Count the number of scrapers
         scrapers = org.get("scrapers", [])
         scraper_count = len(scrapers)
+        # Append to all scrapes
+        self.existing_data['all_scrapes'].append(scrape_record)
         
-        # Find the most recent announcement for this school
-        latest_announcement = db.articles.find_one(
-            {"org": school_name},
-            {"title": 1, "date": 1, "url": 1},
-            sort=[("date", -1)]
-        )
+        # Update metadata
+        self.existing_data['last_updated'] = scrape_time.isoformat()
+        self.existing_data['total_unique_videos'] = len(self.existing_data['video_history'])
         
-        # Extract announcement details
-        latest_title = "No announcements"
-        latest_date = "N/A"
-        latest_url = ""
-        sort_date = datetime(1970, 1, 1)  # Default old date for sorting
+        # Print summary
+        self.print_summary(scrape_record)
+    
+    def save_data(self):
+        """Save data to JSON file"""
+        os.makedirs("output", exist_ok=True)
         
-        if latest_announcement:
-            latest_title = latest_announcement.get("title", "No title")
+        with open(self.filename, 'w', encoding='utf-8') as f:
+            json.dump(self.existing_data, f, indent=2, ensure_ascii=False)
+
+        
+        print(f"💾 Data saved to {self.filename}")
+    
+    def print_summary(self, scrape_record):
+        """Print summary of the scrape"""
+        print(f"\n📈 Metrics Summary:")
+        
+        # Find videos with highest engagement
+        videos_with_views = [v for v in scrape_record['videos'] if v.get('views')]
+        if videos_with_views:
+            sorted_videos = sorted(
+                videos_with_views,
+                key=lambda x: self.parse_metric(x.get('views', '0')),
+                reverse=True
+            )[:3]
             
-            date_value = latest_announcement.get("date")
-            if isinstance(date_value, datetime):
-                # Convert UTC to local
-                local_date = utc_to_local(date_value)
-                latest_date = local_date.strftime("%Y-%m-%d")
-                sort_date = date_value  # Store actual datetime for sorting
-            else:
-                latest_date = str(date_value) if date_value else "Unknown date"
-                
-            latest_url = latest_announcement.get("url", "")
+            print("   Top videos by views:")
+            for video in sorted_videos:
+                desc = video.get('description', '')[:40]
+                print(f"   - {desc}...")
+                print(f"     Views: {video.get('views')}, Likes: {video.get('likes')}")
+    
+    def parse_metric(self, metric_str):
+        """Convert metric strings to numbers"""
+        if not metric_str:
+            return 0
         
-        # Count total announcements for this school
-        announcement_count = db.articles.count_documents({"org": school_name, "date": {"$gte": start_date}})
+        metric_str = str(metric_str).strip()
+        multipliers = {'K': 1000, 'M': 1000000, 'B': 1000000000}
+        
+        for suffix, multiplier in multipliers.items():
+            if suffix in metric_str.upper():
+                try:
+                    number = float(re.sub(r'[^0-9.]', '', metric_str.replace(suffix, '')))
+                    return int(number * multiplier)
+                except:
+                    return 0
         
         # Add data to the list
         schools_data.append({
@@ -935,20 +926,70 @@ def main():
     
     st.title("Campus Announcements [DRAFT]")
     st.markdown("Announcements from the provosts' and presidents' offices at select universities.")
+        try:
+            return int(re.sub(r'[^0-9]', '', metric_str))
+        except:
+            return 0
 
-    db = get_db()
+
+def run_scraper():
+    """Function to run the scraper - used by scheduler"""
+    print(f"\n🔄 Scheduled scrape starting...")
+    scraper = TikTokMetadataScraper(username="whitehouse", append_mode=True)
+    asyncio.run(scraper.run())
+    print(f"✅ Scheduled scrape completed\n")
+
+
+def setup_scheduler():
+    """Setup automatic scheduling"""
+    print("⏰ Setting up automatic scheduling...")
+    print("   Scheduled times: 08:00, 12:00, 16:00, 20:00")
     
-    # Create tabs for different views
-    tab1, tab2, tab3 = st.tabs(["Announcements", "Schools", "URLs"])
+    # Schedule 4 times a day
+    schedule.every().day.at("08:00").do(run_scraper)
+    schedule.every().day.at("12:00").do(run_scraper)
+    schedule.every().day.at("16:00").do(run_scraper)
+    schedule.every().day.at("20:00").do(run_scraper)
     
-    with tab1:
-        display_announcements(db)
+    print("📅 Scheduler is running. Press Ctrl+C to stop.")
+    print(f"   Next run: {schedule.next_run()}")
     
-    with tab2:
-        display_schools_summary(db)
-        
-    with tab3:
-        display_scraper_status(db)
+    # Keep running
+    while True:
+        schedule.run_pending()
+        time.sleep(60)  # Check every minute
+
+
+async def main():
+    """Main function with options"""
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "--schedule":
+            # Run with scheduler
+            setup_scheduler()
+        elif sys.argv[1] == "--once":
+            # Run once
+            scraper = TikTokMetadataScraper(username="whitehouse", append_mode=True)
+            await scraper.run()
+    else:
+        # Default: run once
+        scraper = TikTokMetadataScraper(username="whitehouse", append_mode=True)
+
 
 if __name__ == "__main__":
-    main()
+    print("🚀 TikTok Metadata Scraper - Automated Version")
+    print("=" * 60)
+    print("Usage:")
+    print("  python scraper.py           # Run once")
+    print("  python scraper.py --once    # Run once")
+    print("  python scraper.py --schedule # Run 4x daily automatically")
+    print("=" * 60)
+    
+    # Install schedule library if needed
+    try:
+        import schedule
+    except ImportError:
+        print("\n⚠️  Installing required 'schedule' library...")
+        os.system("pip install schedule")
+        import schedule
+    
+    asyncio.run(main())
