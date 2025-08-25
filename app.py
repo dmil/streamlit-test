@@ -926,12 +926,6 @@ def main():
     
     st.title("Campus Announcements [DRAFT]")
     st.markdown("Announcements from the provosts' and presidents' offices at select universities.")
-        try:
-            return int(re.sub(r'[^0-9]', '', metric_str))
-        except:
-            return 0
-
-
 def run_scraper():
     """Function to run the scraper - used by scheduler"""
     print(f"\n🔄 Scheduled scrape starting...")
