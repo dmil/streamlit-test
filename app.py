@@ -208,6 +208,25 @@ def check_and_send_daily_report(db):
         
         return True, "All scrapers healthy - no notification needed"
 
+def clear_all_filters():
+    """Callback function to reset all filter values"""
+    st.session_state['show_govt_related_ann'] = False
+    st.session_state['show_lawsuit_related_ann'] = False
+    st.session_state['show_funding_related_ann'] = False
+    st.session_state['show_protest_related_ann'] = False
+    st.session_state['show_layoff_related_ann'] = False
+    st.session_state['show_president_related_ann'] = False
+    st.session_state['show_provost_related_ann'] = False
+    st.session_state['show_faculty_related_ann'] = False
+    st.session_state['show_trustees_related_ann'] = False
+    st.session_state['show_trump_related_ann'] = False
+    st.session_state['search_term'] = ""
+    st.session_state['selected_school'] = "All"
+    st.session_state['ann_page'] = 0
+    # Clear the filter state tracking
+    if 'last_filter_state' in st.session_state:
+        del st.session_state['last_filter_state']
+
 def display_announcements(db):
     """Display the announcements view with optimized pagination."""
     st.markdown('⚠️ Please note that this is an unedited **first draft** proof-of-concept. Classifications **WILL BE** inaccurate. ⚠️', unsafe_allow_html=True)
@@ -257,13 +276,15 @@ def display_announcements(db):
             help="LLM Prompt: Items related to Donald Trump (mentions, policies, reactions to Trump, etc.)")
     
     # Add a text search bar for content search
-    search_term = st.text_input("🔍 Search announcement content", value="", key="search_term", help="Enter keywords to search announcement content (case-insensitive)")
+    search_term = st.text_input("🔍 Search announcement content", 
+                               key="search_term", 
+                               help="Enter keywords to search announcement content (case-insensitive)")
 
     # Create a dropdown for school selection with alphabetically sorted options
     school_names = [school["name"] for school in schools]
     school_names.sort()  # Sort school names alphabetically
     school_options = ["All"] + school_names
-    selected_school = st.selectbox("Filter by School", school_options)
+    selected_school = st.selectbox("Filter by School", school_options, key="selected_school")
 
     # Build the query based on the selected school
     query = {}
@@ -349,12 +370,9 @@ def display_announcements(db):
                     )
 
     with col_clear:
-        if st.button("🗑️ Clear All Filters", help="Reset all category filters"):
-            # Clear session state and rerun
-            for key in list(st.session_state.keys()):
-                if key.startswith(('show_', 'search_term', 'ann_page', 'last_filter_state')):
-                    del st.session_state[key]
-            st.rerun()
+        st.button("🗑️ Clear All Filters", 
+                 help="Reset all category filters", 
+                 on_click=clear_all_filters)
 
     # Only fetch current page data for performance
     start_idx = st.session_state["ann_page"] * PAGE_SIZE
