@@ -926,70 +926,8 @@ def main():
     
     st.title("Campus Announcements [DRAFT]")
     st.markdown("Announcements from the provosts' and presidents' offices at select universities.")
-        try:
-            return int(re.sub(r'[^0-9]', '', metric_str))
-        except:
-            return 0
-
-
-def run_scraper():
-    """Function to run the scraper - used by scheduler"""
-    print(f"\n🔄 Scheduled scrape starting...")
-    scraper = TikTokMetadataScraper(username="whitehouse", append_mode=True)
-    asyncio.run(scraper.run())
-    print(f"✅ Scheduled scrape completed\n")
-
-
-def setup_scheduler():
-    """Setup automatic scheduling"""
-    print("⏰ Setting up automatic scheduling...")
-    print("   Scheduled times: 08:00, 12:00, 16:00, 20:00")
-    
-    # Schedule 4 times a day
-    schedule.every().day.at("08:00").do(run_scraper)
-    schedule.every().day.at("12:00").do(run_scraper)
-    schedule.every().day.at("16:00").do(run_scraper)
-    schedule.every().day.at("20:00").do(run_scraper)
-    
-    print("📅 Scheduler is running. Press Ctrl+C to stop.")
-    print(f"   Next run: {schedule.next_run()}")
-    
-    # Keep running
-    while True:
-        schedule.run_pending()
-        time.sleep(60)  # Check every minute
-
-
-async def main():
-    """Main function with options"""
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "--schedule":
-            # Run with scheduler
-            setup_scheduler()
-        elif sys.argv[1] == "--once":
-            # Run once
-            scraper = TikTokMetadataScraper(username="whitehouse", append_mode=True)
-            await scraper.run()
-    else:
-        # Default: run once
-        scraper = TikTokMetadataScraper(username="whitehouse", append_mode=True)
-
-
-if __name__ == "__main__":
-    print("🚀 TikTok Metadata Scraper - Automated Version")
-    print("=" * 60)
-    print("Usage:")
-    print("  python scraper.py           # Run once")
-    print("  python scraper.py --once    # Run once")
-    print("  python scraper.py --schedule # Run 4x daily automatically")
-    print("=" * 60)
-    
-    # Install schedule library if needed
     try:
-        import schedule
-    except ImportError:
-        print("\n⚠️  Installing required 'schedule' library...")
-        os.system("pip install schedule")
-        import schedule
-    
-    asyncio.run(main())
+        return int(re.sub(r'[^0-9]', '', metric_str))
+    except:
+        return 0
+
