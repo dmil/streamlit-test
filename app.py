@@ -64,19 +64,10 @@ def get_filtered_count_cached(query_str):
     """Get count of documents matching query - cached for performance"""
     try:
         db = get_db()
-        query = eval(query_str)  # Convert string back to dict for caching
-        
-        # Fix datetime timezone issues in query
-        if "date" in query and "$gte" in query["date"]:
-            date_filter = query["date"]["$gte"]
-            if hasattr(date_filter, 'tzinfo'):
-                if date_filter.tzinfo is None:
-                    query["date"]["$gte"] = date_filter.replace(tzinfo=timezone.utc)
-        
-        # Use countDocuments with a timeout for faster zero-result responses
+        query = eval(query_str)
         return db.articles.count_documents(query, maxTimeMS=3000)
     except Exception as e:
-        print(f"Error counting documents: {e}")  # Log to console instead of streamlit
+        print(f"Error counting documents: {e}")
         return 0
 
 def get_filtered_count(db, query):
@@ -246,17 +237,9 @@ def get_paginated_announcements(query_str, page, page_size):
     """Get paginated announcements with caching"""
     try:
         db = get_db()
-        query = eval(query_str)  # Convert string back to dict
+        query = eval(query_str)
         start_idx = page * page_size
         
-        # Fix datetime timezone issues in query
-        if "date" in query and "$gte" in query["date"]:
-            date_filter = query["date"]["$gte"]
-            if hasattr(date_filter, 'tzinfo'):
-                if date_filter.tzinfo is None:
-                    query["date"]["$gte"] = date_filter.replace(tzinfo=timezone.utc)
-        
-        # Use MongoDB projection to only fetch needed fields for better performance
         projection = {
             "_id": 0,
             "title": 1,
@@ -268,11 +251,10 @@ def get_paginated_announcements(query_str, page, page_size):
             "llm_response": 1
         }
         
-        # Add maxTimeMS for faster timeout on slow queries
         cursor = db.articles.find(query, projection).sort("date", -1).skip(start_idx).limit(page_size).max_time_ms(5000)
         return list(cursor)
     except Exception as e:
-        print(f"Error fetching announcements: {e}")  # Log to console instead
+        print(f"Error fetching announcements: {e}")
         return []
 
 def display_announcements(db):
@@ -363,13 +345,7 @@ def display_announcements(db):
         query["$or"] = filter_conditions
 
     # Add date filter for announcements after the start date
-    # Ensure start_date is timezone-aware
-    if start_date.tzinfo is None:
-        start_date_aware = start_date.replace(tzinfo=timezone.utc)
-    else:
-        start_date_aware = start_date
-    
-    query["date"] = {"$gte": start_date_aware}
+    query["date"] = {"$gte": start_date}
 
     # Add content search filter if search_term is provided
     if search_term.strip():
@@ -787,12 +763,6 @@ def get_schools_summary_data(mongo_uri, db_name, _organizations_data, start_date
     db = client[db_name]
     schools_data = []
     
-    # Ensure start_date is timezone-aware
-    if start_date.tzinfo is None:
-        start_date_aware = start_date.replace(tzinfo=timezone.utc)
-    else:
-        start_date_aware = start_date
-    
     for org in _organizations_data:
         school_name = org.get("name", "Unknown School")
         school_color = org.get("color", "#000000")
@@ -805,7 +775,7 @@ def get_schools_summary_data(mongo_uri, db_name, _organizations_data, start_date
         try:
             announcement_count = db.articles.count_documents({
                 "org": school_name,
-                "date": {"$gte": start_date_aware}
+                "date": {"$gte": start_date}
             })
         except Exception as e:
             print(f"Error counting announcements for {school_name}: {e}")
@@ -814,7 +784,7 @@ def get_schools_summary_data(mongo_uri, db_name, _organizations_data, start_date
         # Get the most recent announcement for this school
         try:
             latest_announcement = db.articles.find_one(
-                {"org": school_name, "date": {"$gte": start_date_aware}},
+                {"org": school_name, "date": {"$gte": start_date}},
                 sort=[("date", -1)]
             )
         except Exception as e:
@@ -826,7 +796,7 @@ def get_schools_summary_data(mongo_uri, db_name, _organizations_data, start_date
             if isinstance(latest_date_obj, datetime):
                 local_date = utc_to_local(latest_date_obj)
                 latest_date = local_date.strftime("%Y-%m-%d %I:%M %p")
-                sort_date = latest_date_obj  # Use original datetime for sorting
+                sort_date = latest_date_obj
             else:
                 latest_date = "No Date"
                 sort_date = datetime.min.replace(tzinfo=timezone.utc)
@@ -839,14 +809,13 @@ def get_schools_summary_data(mongo_uri, db_name, _organizations_data, start_date
             latest_url = ""
             sort_date = datetime.min.replace(tzinfo=timezone.utc)
         
-        # Add data to the list
         schools_data.append({
             "School": school_name,
             "Color": school_color,
             "Scrapers": scraper_count,
             "Announcements": announcement_count,
             "Latest Date": latest_date,
-            "Sort Date": sort_date,  # Hidden column for sorting
+            "Sort Date": sort_date,
             "Latest Title": latest_title,
             "URL": latest_url
         })
