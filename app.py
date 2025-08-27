@@ -25,8 +25,8 @@ MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME", "campus_data")
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
 
-# Define the start date for filtering announcements
-start_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
+# Define the start date for filtering announcements - use naive datetime to match MongoDB data
+start_date = datetime(2025, 1, 1)
 
 def utc_to_local(utc_dt):
     """Function to convert UTC datetime to local time"""
@@ -882,7 +882,7 @@ def main():
     )
     
     st.title("Campus Announcements [DRAFT]")
-    st.markdown("Announcements from the provosts' and presidents' offices at select universities.")
+    st.markdown("Announcements from select universities.")
     
     try:
         db = get_db()
