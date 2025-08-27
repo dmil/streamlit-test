@@ -58,7 +58,7 @@ def get_db():
     )
     return client[DB_NAME]
 
-# PERFORMANCE OPTIMIZATION: Cache count queries for 30 seconds (reduced from 60)
+# PERFORMANCE OPTIMIZATION: Cache count queries for 30 seconds
 @st.cache_data(ttl=30)
 def get_filtered_count_cached(query_str):
     """Get count of documents matching query - cached for performance"""
@@ -232,7 +232,7 @@ def check_and_send_daily_report(db, _organizations_data):
     
     return True, "All scrapers healthy - no notification needed"
 
-# PERFORMANCE OPTIMIZATION: Cache paginated data for 60 seconds (reduced from 120)
+# PERFORMANCE OPTIMIZATION: Cache paginated data for 60 seconds
 @st.cache_data(ttl=60)
 def get_paginated_announcements(query_str, page, page_size):
     """Get paginated announcements with caching"""
@@ -616,7 +616,7 @@ def get_scraper_status_data(_organizations_data):
                 path_suffix = path
 
             # path number is the last digit of the path suffix if it exists
-            path_number = path_suffix[-1] if path_suffix and path_suffix[-1].isdigit() else 1
+            path_number = path_suffix[-1] if path_suffix and path_suffix[-1].isdigit() else "1"
 
             # === SIMPLIFIED HEALTH CHECK LOGIC ===
             health_status = "❌ Unhealthy"
