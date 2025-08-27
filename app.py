@@ -31,89 +31,64 @@ MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME", "campus_data")
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
 
-# Define the start date for filtering announcements - use timezone-naive datetime to match MongoDB query expectations
-start_date = datetime(2025, 1, 1)
+# Define the start date for filtering announcements - use timezone-aware datetime to match MongoDB data
+start_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
 
 def utc_to_local(utc_dt):
-    """Function to convert UTC datetime to local time with better error handling"""
+    """Function to convert UTC datetime to local time"""
     if utc_dt is None:
         return None
     if not isinstance(utc_dt, datetime):
         return utc_dt
     
-    try:
-        # If datetime doesn't have tzinfo, assume it's UTC
-        if utc_dt.tzinfo is None:
-            utc_dt = utc_dt.replace(tzinfo=timezone.utc)
-        
-        # Convert to local timezone - fallback to UTC if local timezone fails
-        try:
-            local_tz = get_localzone()
-            local_dt = utc_dt.astimezone(local_tz)
-        except Exception:
-            # Fallback to UTC if local timezone detection fails
-            local_dt = utc_dt.astimezone(timezone.utc)
-        
-        return local_dt
-    except Exception as e:
-        print(f"Error converting timezone: {e}")
-        return utc_dt
+    # If datetime doesn't have tzinfo, assume it's UTC
+    if utc_dt.tzinfo is None:
+        utc_dt = utc_dt.replace(tzinfo=timezone.utc)
+    
+    # Convert to local timezone
+    local_tz = get_localzone()
+    local_dt = utc_dt.astimezone(local_tz)
+    return local_dt
 
 @st.cache_resource
 def get_db():
-    """Connect to MongoDB with enhanced connection pooling and error handling"""
-    try:
-        client = MongoClient(
-            MONGO_URI, 
-            maxPoolSize=10,  # Reduced for deployment stability
-            minPoolSize=1, 
-            maxIdleTimeMS=30000,
-            serverSelectionTimeoutMS=10000,  # Increased timeout
-            connectTimeoutMS=10000,
-            socketTimeoutMS=10000
-        )
-        # Test the connection
-        client.admin.command('ping')
-        return client[DB_NAME]
-    except Exception as e:
-        st.error(f"Failed to connect to MongoDB: {e}")
-        raise
+    """Connect to MongoDB with enhanced connection pooling"""
+    client = MongoClient(
+        MONGO_URI, 
+        maxPoolSize=50, 
+        minPoolSize=5, 
+        maxIdleTimeMS=30000,
+        serverSelectionTimeoutMS=5000,  # Faster timeout
+        connectTimeoutMS=5000,
+        socketTimeoutMS=5000
+    )
+    return client[DB_NAME]
 
-# PERFORMANCE OPTIMIZATION: Cache count queries for 30 seconds
-@st.cache_data(ttl=30)
-def get_filtered_count_cached(mongo_uri, db_name, query_str):
+# PERFORMANCE OPTIMIZATION: Cache count queries for 60 seconds
+@st.cache_data(ttl=60)
+def get_filtered_count_cached(query_str):
     """Get count of documents matching query - cached for performance"""
     try:
-        client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
-        db = client[db_name]
-        # Safely evaluate query string
-        query = eval(query_str) if query_str else {}
-        count = db.articles.count_documents(query, maxTimeMS=5000)
-        client.close()
-        return count
+        db = get_db()
+        query = eval(query_str)  # Convert string back to dict for caching
+        return db.articles.count_documents(query)
     except Exception as e:
-        print(f"Error counting documents: {e}")
+        st.error(f"Error counting documents: {e}")
         return 0
 
-def get_filtered_count(query):
+def get_filtered_count(db, query):
     """Get count wrapper that uses caching"""
     # Convert query dict to string for caching key
-    query_str = str(query) if query else "{}"
-    return get_filtered_count_cached(MONGO_URI, DB_NAME, query_str)
+    query_str = str(query)
+    return get_filtered_count_cached(query_str)
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def get_organizations_data(mongo_uri, db_name):
     """Get all organizations data - cached for performance"""
-    try:
-        client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
-        db = client[db_name]
-        orgs_cursor = db.orgs.find({}, {"name": 1, "color": 1, "scrapers": 1})
-        orgs_list = list(orgs_cursor)
-        client.close()
-        return orgs_list
-    except Exception as e:
-        print(f"Error fetching organizations: {e}")
-        return []
+    client = MongoClient(mongo_uri)
+    db = client[db_name]
+    orgs_cursor = db.orgs.find({}, {"name": 1, "color": 1, "scrapers": 1})
+    return list(orgs_cursor)
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def get_scraper_mapping(_organizations_data):
@@ -284,16 +259,16 @@ def check_and_send_daily_report(mongo_uri, db_name, _organizations_data):
         print(f"Error in daily report check: {e}")
         return False, f"Error: {str(e)}"
 
-# PERFORMANCE OPTIMIZATION: Cache paginated data for 60 seconds
-@st.cache_data(ttl=60)
-def get_paginated_announcements(mongo_uri, db_name, query_str, page, page_size):
+# PERFORMANCE OPTIMIZATION: Cache paginated data
+@st.cache_data(ttl=120)  # Cache for 2 minutes
+def get_paginated_announcements(query_str, page, page_size):
     """Get paginated announcements with caching"""
     try:
-        client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
-        db = client[db_name]
-        query = eval(query_str) if query_str else {}
+        db = get_db()
+        query = eval(query_str)  # Convert string back to dict
         start_idx = page * page_size
         
+        # Use MongoDB projection to only fetch needed fields for better performance
         projection = {
             "_id": 0,
             "title": 1,
@@ -305,12 +280,10 @@ def get_paginated_announcements(mongo_uri, db_name, query_str, page, page_size):
             "llm_response": 1
         }
         
-        cursor = db.articles.find(query, projection).sort("date", -1).skip(start_idx).limit(page_size).max_time_ms(10000)
-        result = list(cursor)
-        client.close()
-        return result
+        cursor = db.articles.find(query, projection).sort("date", -1).skip(start_idx).limit(page_size)
+        return list(cursor)
     except Exception as e:
-        print(f"Error fetching announcements: {e}")
+        st.error(f"Error fetching announcements: {e}")
         return []
 
 def display_announcements():
@@ -414,7 +387,7 @@ def display_announcements():
 
         # Get count using cached version with performance optimization
         with st.spinner("Counting results..." if search_term.strip() or filter_conditions else None):
-            num_announcements = get_filtered_count(query)
+            num_announcements = get_filtered_count(db, query)
 
         st.write(f"Number of announcements: **{num_announcements:,}** (from {start_date.strftime('%B %d, %Y')} onwards)")
         
@@ -478,7 +451,7 @@ def display_announcements():
         # PERFORMANCE OPTIMIZATION: Use cached paginated data
         query_str = str(query)  # Convert to string for caching
         with st.spinner("Loading announcements..."):
-            paged_announcements = get_paginated_announcements(MONGO_URI, DB_NAME, query_str, st.session_state["ann_page"], PAGE_SIZE)
+            paged_announcements = get_paginated_announcements(query_str, st.session_state["ann_page"], PAGE_SIZE)
 
         # Display announcements for current page
         for ann in paged_announcements:
@@ -908,6 +881,10 @@ def get_schools_summary_data(mongo_uri, db_name, _organizations_data, start_date
             if latest_announcement:
                 latest_date_obj = latest_announcement.get("date")
                 if isinstance(latest_date_obj, datetime):
+                    # Ensure the date is timezone-aware
+                    if latest_date_obj.tzinfo is None:
+                        latest_date_obj = latest_date_obj.replace(tzinfo=timezone.utc)
+                    
                     local_date = utc_to_local(latest_date_obj)
                     latest_date = local_date.strftime("%Y-%m-%d %I:%M %p")
                     sort_date = latest_date_obj
