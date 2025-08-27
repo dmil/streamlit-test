@@ -274,7 +274,7 @@ def display_announcements(db):
     st.markdown('>_Check any box to filter for items identified by our LLM as related to that category.<br/>Hover on each question mark for more information about the criteria._', unsafe_allow_html=True)
 
     # Create a columns layout for the checkboxes (REMOVED: President, Faculty, Trustees, Provost)
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         show_govt_related = st.checkbox("👨‍⚖️ Government Related", 
@@ -283,14 +283,16 @@ def display_announcements(db):
         show_lawsuit_related = st.checkbox("⚖️ Lawsuit Related", 
             key="show_lawsuit_related_ann",
             help="LLM Prompt: Items mentioning lawsuits or legal actions related to the university")
+
+    with col2:
         show_funding_related = st.checkbox("💰 Funding Related", 
             key="show_funding_related_ann",
             help="LLM Prompt: Items discussing funding cuts or financial issues")
-
-    with col2:
         show_protest_related = st.checkbox("🪧 Protest Related", 
             key="show_protest_related_ann",
             help="LLM Prompt: Items mentioning campus protests or disruptions")
+
+    with col3:
         show_layoff_related = st.checkbox("✂️ Layoff Related", 
             key="show_layoff_related_ann",
             help="LLM Prompt: Items discussing layoffs, job cuts, staff reductions, or employment terminations")
