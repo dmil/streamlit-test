@@ -1,9 +1,8 @@
-
 #!/usr/bin/env python3
 """
 Simple Streamlit front-end to display announcements from MongoDB.
 Shows title, school, date, URL, and source base URL for each announcement.
-OPTIMIZED VERSION with scraper type filtering and performance improvements.
+OPTIMIZED VERSION with improved performance and announcement type filtering.
 """
 
 import os
@@ -59,14 +58,15 @@ def get_db():
     )
     return client[DB_NAME]
 
-# PERFORMANCE OPTIMIZATION: Cache count queries for 60 seconds
-@st.cache_data(ttl=60)
+# PERFORMANCE OPTIMIZATION: Cache count queries for 30 seconds (reduced from 60)
+@st.cache_data(ttl=30)
 def get_filtered_count_cached(query_str):
     """Get count of documents matching query - cached for performance"""
     try:
         db = get_db()
         query = eval(query_str)  # Convert string back to dict for caching
-        return db.articles.count_documents(query)
+        # Use countDocuments with a timeout for faster zero-result responses
+        return db.articles.count_documents(query, maxTimeMS=3000)
     except Exception as e:
         st.error(f"Error counting documents: {e}")
         return 0
@@ -191,51 +191,49 @@ def check_and_send_daily_report(db, _organizations_data):
     for org in _organizations_data:
         school_name = org.get("name", "Unknown School")
         scrapers = org.get("scrapers", [])
+        
+        for scraper in scrapers:
+            # Simple health check
+            last_run = scraper.get("last_run")
+            if last_run and isinstance(last_run, datetime):
+                current_time = datetime.now(timezone.utc)
+                if last_run.tzinfo is None:
+                    last_run = last_run.replace(tzinfo=timezone.utc)
+                
+                hours_since_run = (current_time - last_run).total_seconds() / 3600
+                
+                if hours_since_run > 24:  # Unhealthy
+                    failed_scrapers.append({
+                        "School": school_name,
+                        "Name": scraper.get("name", "").replace(" announcements", ""),
+                        "Health Reason": f"Last run {int(hours_since_run)}h ago",
+                        "URL": scraper.get("url", "No URL")
+                    })
+            else:
+                failed_scrapers.append({
+                    "School": school_name,
+                    "Name": scraper.get("name", "").replace(" announcements", ""),
+                    "Health Reason": "No run data available",
+                    "URL": scraper.get("url", "No URL")
+                })
     
-    def process_scrape_data(self, videos, scrape_time):
-        """Process and append scrape data"""
-        # Create scrape record
-        scrape_record = {
-            'scrape_id': scrape_time.strftime('%Y%m%d_%H%M%S'),
-            'scraped_at': scrape_time.isoformat(),
-            'videos_found': len(videos),
-            'videos': []
-        }
-        
-        # Process each video
-        for video in videos:
-            video_id = video.get('id')
-            
-            # Add exact timestamp
-            video['exact_scrape_time'] = scrape_time.isoformat()
-            
-            # Track in video history
-            if video_id:
-                if video_id not in self.existing_data['video_history']:
-                    self.existing_data['video_history'][video_id] = {
-                        'first_seen': scrape_time.isoformat(),
-                        'description': video.get('description', ''),
-                        'metrics_history': []
-                    }
-                
-                # Add metrics snapshot
-                metrics_snapshot = {
-                    'timestamp': scrape_time.isoformat(),
-                    'views': video.get('views'),
-                    'likes': video.get('likes'),
-                    'comments': video.get('comments'),
-                    'shares': video.get('shares'),
-                    'bookmarks': video.get('bookmarks')
-                }
-                
-                self.existing_data['video_history'][video_id]['metrics_history'].append(metrics_snapshot)
-            
-            scrape_record['videos'].append(video)
-        
-        return True, "All scrapers healthy - no notification needed"
+    if failed_scrapers:
+        success = send_slack_notification(failed_scrapers, is_daily_report=True)
+        if success:
+            # Update the tracking record
+            db.slack_reports.update_one(
+                {"type": "daily_scraper_report"},
+                {"$set": {"date": today, "sent_at": datetime.now(timezone.utc)}},
+                upsert=True
+            )
+            return True, f"Daily report sent for {len(failed_scrapers)} failed scrapers"
+        else:
+            return False, "Failed to send daily report"
+    
+    return True, "All scrapers healthy - no notification needed"
 
-# PERFORMANCE OPTIMIZATION: Cache paginated data
-@st.cache_data(ttl=120)  # Cache for 2 minutes
+# PERFORMANCE OPTIMIZATION: Cache paginated data for 60 seconds (reduced from 120)
+@st.cache_data(ttl=60)
 def get_paginated_announcements(query_str, page, page_size):
     """Get paginated announcements with caching"""
     try:
@@ -255,49 +253,12 @@ def get_paginated_announcements(query_str, page, page_size):
             "llm_response": 1
         }
         
-        cursor = db.articles.find(query, projection).sort("date", -1).skip(start_idx).limit(page_size)
+        # Add maxTimeMS for faster timeout on slow queries
+        cursor = db.articles.find(query, projection).sort("date", -1).skip(start_idx).limit(page_size).max_time_ms(5000)
         return list(cursor)
     except Exception as e:
         st.error(f"Error fetching announcements: {e}")
         return []
-
-def clear_all_filters():
-    """Callback function to reset all filter values"""
-    st.session_state['show_govt_related_ann'] = False
-    st.session_state['show_lawsuit_related_ann'] = False
-    st.session_state['show_funding_related_ann'] = False
-    st.session_state['show_protest_related_ann'] = False
-    st.session_state['show_layoff_related_ann'] = False
-    st.session_state['show_president_related_ann'] = False
-    st.session_state['show_provost_related_ann'] = False
-    st.session_state['show_faculty_related_ann'] = False
-    st.session_state['show_trustees_related_ann'] = False
-    st.session_state['show_trump_related_ann'] = False
-    st.session_state['search_term'] = ""
-    st.session_state['selected_school'] = "All"
-    st.session_state['ann_page'] = 0
-    # Clear the filter state tracking
-    if 'last_filter_state' in st.session_state:
-        del st.session_state['last_filter_state']
-
-def clear_all_filters():
-    """Callback function to reset all filter values"""
-    st.session_state['show_govt_related_ann'] = False
-    st.session_state['show_lawsuit_related_ann'] = False
-    st.session_state['show_funding_related_ann'] = False
-    st.session_state['show_protest_related_ann'] = False
-    st.session_state['show_layoff_related_ann'] = False
-    st.session_state['show_president_related_ann'] = False
-    st.session_state['show_provost_related_ann'] = False
-    st.session_state['show_faculty_related_ann'] = False
-    st.session_state['show_trustees_related_ann'] = False
-    st.session_state['show_trump_related_ann'] = False
-    st.session_state['search_term'] = ""
-    st.session_state['selected_school'] = "All"
-    st.session_state['ann_page'] = 0
-    # Clear the filter state tracking
-    if 'last_filter_state' in st.session_state:
-        del st.session_state['last_filter_state']
 
 def display_announcements(db):
     """Display the announcements view with optimized pagination."""
@@ -312,8 +273,8 @@ def display_announcements(db):
 
     st.markdown('>_Check any box to filter for items identified by our LLM as related to that category.<br/>Hover on each question mark for more information about the criteria._', unsafe_allow_html=True)
 
-    # Create a columns layout for the checkboxes
-    col1, col2, col3 = st.columns(3)
+    # Create a columns layout for the checkboxes (REMOVED: President, Faculty, Trustees, Provost)
+    col1, col2 = st.columns(2)
 
     with col1:
         show_govt_related = st.checkbox("👨‍⚖️ Government Related", 
@@ -325,56 +286,47 @@ def display_announcements(db):
         show_funding_related = st.checkbox("💰 Funding Related", 
             key="show_funding_related_ann",
             help="LLM Prompt: Items discussing funding cuts or financial issues")
+
+    with col2:
         show_protest_related = st.checkbox("🪧 Protest Related", 
             key="show_protest_related_ann",
             help="LLM Prompt: Items mentioning campus protests or disruptions")
-
-    with col2:
         show_layoff_related = st.checkbox("✂️ Layoff Related", 
             key="show_layoff_related_ann",
             help="LLM Prompt: Items discussing layoffs, job cuts, staff reductions, or employment terminations")
-        show_president_related = st.checkbox("🎓 President Related", 
-            key="show_president_related_ann",
-            help="LLM Prompt: Items related to the president of the school")
-        show_provost_related = st.checkbox("📚 Provost Related", 
-            key="show_provost_related_ann",
-            help="LLM Prompt: Items related to the provost of the school")
-        show_faculty_related = st.checkbox("👨‍🏫 Faculty Related", 
-            key="show_faculty_related_ann",
-            help="LLM Prompt: Items related to faculty members, faculty actions, or faculty governance")
-    
-    with col3:
-        show_trustees_related = st.checkbox("🏛️ Trustees Related", 
-            key="show_trustees_related_ann",
-            help="LLM Prompt: Items related to the board of trustees or trustee actions")
         show_trump_related = st.checkbox("🇺🇸 Trump Related", 
             key="show_trump_related_ann",
             help="LLM Prompt: Items related to Donald Trump (mentions, policies, reactions to Trump, etc.)")
     
     # Add a text search bar for content search
-    search_term = st.text_input("🔍 Search announcement content", 
-                               key="search_term", 
-                               help="Enter keywords to search announcement content (case-insensitive)")
+    search_term = st.text_input("🔍 Search announcement content", value="", key="search_term", help="Enter keywords to search announcement content (case-insensitive)")
 
-    # Create a dropdown for school selection with alphabetically sorted options
-    school_names = [school["name"] for school in schools]
-    school_names.sort()  # Sort school names alphabetically
-    school_options = ["All"] + school_names
-    selected_school = st.selectbox("Filter by School", school_options, key="selected_school")
+    # Create two columns for filters
+    filter_col1, filter_col2 = st.columns(2)
+    
+    with filter_col1:
+        # Create a dropdown for school selection with alphabetically sorted options
+        school_options = ["All"] + school_names
+        selected_school = st.selectbox("Filter by School", school_options)
+    
+    with filter_col2:
+        # Create a dropdown for scraper type selection
+        scraper_type_options = ["All"] + scraper_types
+        selected_scraper_type = st.selectbox("Filter by Announcement Type", scraper_type_options, help="Filter by the type of announcements (e.g., provost, president, etc.)")
 
     # Build the query based on the selected school
     query = {}
     if selected_school != "All":
         query["org"] = selected_school
 
-    # NEW: Add scraper type filter to query
+    # Add scraper type filter to query
     if selected_scraper_type != "All":
         # Get all scraper paths that match the selected type
         matching_paths = get_scraper_paths_by_type(organizations_data, selected_scraper_type)
         if matching_paths:
             query["scraper"] = {"$in": matching_paths}
 
-    # Add filters based on selected categories
+    # Add filters based on selected categories (REMOVED: President, Faculty, Trustees, Provost)
     filter_conditions = []
     if show_govt_related:
         filter_conditions.append({"llm_response.government_related.related": True})
@@ -386,14 +338,6 @@ def display_announcements(db):
         filter_conditions.append({"llm_response.protest_related.related": True})
     if show_layoff_related:
         filter_conditions.append({"llm_response.layoff_related.related": True})
-    if show_president_related:
-        filter_conditions.append({"llm_response.president_related.related": True})
-    if show_provost_related:
-        filter_conditions.append({"llm_response.provost_related.related": True})
-    if show_faculty_related:
-        filter_conditions.append({"llm_response.faculty_related.related": True})
-    if show_trustees_related:
-        filter_conditions.append({"llm_response.trustees_related.related": True})
     if show_trump_related:
         filter_conditions.append({"llm_response.trump_related.related": True})
 
@@ -408,17 +352,18 @@ def display_announcements(db):
     if search_term.strip():
         query["content"] = {"$regex": search_term, "$options": "i"}
 
-    # Get count using cached version
-    num_announcements = get_filtered_count(db, query)
+    # Get count using cached version with performance optimization
+    with st.spinner("Counting results..." if search_term.strip() or filter_conditions else None):
+        num_announcements = get_filtered_count(db, query)
 
     st.write(f"Number of announcements: **{num_announcements:,}** (from {start_date.strftime('%B %d, %Y')} onwards)")
     
-    # Pagination logic - improved (UPDATED to include scraper type)
+    # FIXED: Unique pagination state management to prevent duplicate buttons
     PAGE_SIZE = 20
     total_pages = max((num_announcements - 1) // PAGE_SIZE + 1, 1) if num_announcements > 0 else 1
     
-    # Initialize pagination state with unique key based on filters (UPDATED)
-    filter_state_key = f"{selected_school}_{selected_scraper_type}_{show_govt_related}_{show_lawsuit_related}_{show_funding_related}_{show_protest_related}_{show_layoff_related}_{show_president_related}_{show_provost_related}_{show_faculty_related}_{show_trustees_related}_{show_trump_related}_{search_term}"
+    # Create unique filter state key (UPDATED - removed president, faculty, trustees, provost)
+    filter_state_key = f"{selected_school}_{selected_scraper_type}_{show_govt_related}_{show_lawsuit_related}_{show_funding_related}_{show_protest_related}_{show_layoff_related}_{show_trump_related}_{search_term}"
     
     # Reset to page 0 when filters change
     if "last_filter_state" not in st.session_state:
@@ -461,12 +406,15 @@ def display_announcements(db):
                     del st.session_state[key]
             st.rerun()
 
-    # Only fetch current page data for performance
-    start_idx = st.session_state["ann_page"] * PAGE_SIZE
-    
-    # Use MongoDB skip() and limit() for true pagination
-    cursor = db.articles.find(query, {"_id": 0}).sort("date", -1).skip(start_idx).limit(PAGE_SIZE)
-    paged_announcements = list(cursor)
+    # Early exit if no results to improve performance
+    if num_announcements == 0:
+        st.info("No announcements found matching your filters.")
+        return
+
+    # PERFORMANCE OPTIMIZATION: Use cached paginated data
+    query_str = str(query)  # Convert to string for caching
+    with st.spinner("Loading announcements..."):
+        paged_announcements = get_paginated_announcements(query_str, st.session_state["ann_page"], PAGE_SIZE)
 
     # Display announcements for current page
     for ann in paged_announcements:
@@ -507,7 +455,7 @@ def display_announcements(db):
         """
         st.markdown(announcement_html, unsafe_allow_html=True)
         
-        # Show search snippet if search term is provided and content exists - FIXED STYLING FOR DARK MODE
+        # Show search snippet if search term is provided and content exists
         if search_term.strip() and content:
             import re
             search_pattern = re.compile(re.escape(search_term), re.IGNORECASE)
@@ -540,7 +488,7 @@ def display_announcements(db):
                 </div>
                 """, unsafe_allow_html=True)
 
-        # LLM Response Section - only show selected categories
+        # LLM Response Section - only show selected categories (REMOVED: President, Faculty, Trustees, Provost)
         if ann.get("llm_response"):
             llm_response = ann.get("llm_response")
             categories_found = []
@@ -560,18 +508,6 @@ def display_announcements(db):
             if show_layoff_related and llm_response.get("layoff_related", {}).get("related"):
                 categories_found.append(("✂️ Layoffs", llm_response["layoff_related"].get("reason", "")))
 
-            if show_president_related and llm_response.get("president_related", {}).get("related"):
-                categories_found.append(("🎓 President", llm_response["president_related"].get("reason", "")))
-
-            if show_provost_related and llm_response.get("provost_related", {}).get("related"):
-                categories_found.append(("📚 Provost", llm_response["provost_related"].get("reason", "")))
-
-            if show_faculty_related and llm_response.get("faculty_related", {}).get("related"):
-                categories_found.append(("👨‍🏫 Faculty", llm_response["faculty_related"].get("reason", "")))
-
-            if show_trustees_related and llm_response.get("trustees_related", {}).get("related"):
-                categories_found.append(("🏛️ Trustees", llm_response["trustees_related"].get("reason", "")))
-
             if show_trump_related and llm_response.get("trump_related", {}).get("related"):
                 categories_found.append(("🇺🇸 Trump", llm_response["trump_related"].get("reason", "")))
 
@@ -581,25 +517,28 @@ def display_announcements(db):
 
         st.markdown("<hr style=\"margin-top:0.5em;margin-bottom:0.5em;\">", unsafe_allow_html=True)
 
-    # FIXED pagination controls with proper state management
-    col_prev, col_page, col_next = st.columns([1,2,1])
-    
-    with col_prev:
-        prev_disabled = st.session_state["ann_page"] == 0
-        if st.button("⬅️ Prev", key="ann_prev", disabled=prev_disabled):
-            if st.session_state["ann_page"] > 0:
-                st.session_state["ann_page"] -= 1
-                st.rerun()
-    
-    with col_page:
-        st.markdown(f"<div style='text-align:center;'>Page <b>{st.session_state['ann_page']+1}</b> of <b>{total_pages}</b></div>", unsafe_allow_html=True)
-    
-    with col_next:
-        next_disabled = st.session_state["ann_page"] >= total_pages - 1
-        if st.button("Next ➡️", key="ann_next", disabled=next_disabled):
-            if st.session_state["ann_page"] < total_pages - 1:
-                st.session_state["ann_page"] += 1
-                st.rerun()
+    # FIXED: Pagination controls with unique keys and proper state management
+    if total_pages > 1:  # Only show pagination if there are multiple pages
+        st.markdown("<br>", unsafe_allow_html=True)  # Add some spacing
+        
+        col_prev, col_page, col_next = st.columns([1,2,1])
+        
+        with col_prev:
+            prev_disabled = st.session_state["ann_page"] == 0
+            if st.button("⬅️ Prev", key="ann_prev_unique", disabled=prev_disabled):
+                if st.session_state["ann_page"] > 0:
+                    st.session_state["ann_page"] -= 1
+                    st.rerun()
+        
+        with col_page:
+            st.markdown(f"<div style='text-align:center; padding-top:8px;'>Page <b>{st.session_state['ann_page']+1}</b> of <b>{total_pages}</b></div>", unsafe_allow_html=True)
+        
+        with col_next:
+            next_disabled = st.session_state["ann_page"] >= total_pages - 1
+            if st.button("Next ➡️", key="ann_next_unique", disabled=next_disabled):
+                if st.session_state["ann_page"] < total_pages - 1:
+                    st.session_state["ann_page"] += 1
+                    st.rerun()
 
 def convert_to_csv(announcements, scraper_mapping):
     """Convert announcements data to CSV format using cached scraper mapping."""
@@ -621,13 +560,12 @@ def convert_to_csv(announcements, scraper_mapping):
         
         processed_ann["announcement_type"] = scraper_type
         
-        # Add LLM response fields if available
+        # Add LLM response fields if available (REMOVED: President, Faculty, Trustees, Provost)
         llm_response = ann.get("llm_response", {})
         
         classification_fields = [
             "government_related", "government_supportive", "government_opposing",
-            "lawsuit_related", "funding_related", "protest_related", "layoff_related",
-            "president_related", "provost_related", "faculty_related", "trustees_related", "trump_related"
+            "lawsuit_related", "funding_related", "protest_related", "layoff_related", "trump_related"
         ]
         
         for field_name in classification_fields:
@@ -716,7 +654,7 @@ def get_scraper_status_data(_organizations_data):
                     "URL": scraper.get("url", "No URL")
                 })
 
-            # Add to the display list - REMOVED the problematic columns
+            # Add to the display list
             all_scrapers_data.append({
                 "School": school_name,
                 "Name": scraper.get("name", "").replace(" announcements", ""),
@@ -751,6 +689,7 @@ def display_scraper_status(db):
     if not organizations_data:
         st.warning("No scraper information found in the database.")
         return
+    
     # Count total scrapers
     total_scrapers = sum(len(org.get("scrapers", [])) for org in organizations_data)
     
@@ -832,60 +771,36 @@ def get_schools_summary_data(mongo_uri, db_name, _organizations_data, start_date
         # Count the number of scrapers
         scrapers = org.get("scrapers", [])
         scraper_count = len(scrapers)
-        # Append to all scrapes
-        self.existing_data['all_scrapes'].append(scrape_record)
         
-        # Update metadata
-        self.existing_data['last_updated'] = scrape_time.isoformat()
-        self.existing_data['total_unique_videos'] = len(self.existing_data['video_history'])
+        # Count the number of announcements for this school since start_date
+        announcement_count = db.articles.count_documents({
+            "org": school_name,
+            "date": {"$gte": start_date}
+        })
         
-        # Print summary
-        self.print_summary(scrape_record)
-    
-    def save_data(self):
-        """Save data to JSON file"""
-        os.makedirs("output", exist_ok=True)
+        # Get the most recent announcement for this school
+        latest_announcement = db.articles.find_one(
+            {"org": school_name, "date": {"$gte": start_date}},
+            sort=[("date", -1)]
+        )
         
-        with open(self.filename, 'w', encoding='utf-8') as f:
-            json.dump(self.existing_data, f, indent=2, ensure_ascii=False)
-
-        
-        print(f"💾 Data saved to {self.filename}")
-    
-    def print_summary(self, scrape_record):
-        """Print summary of the scrape"""
-        print(f"\n📈 Metrics Summary:")
-        
-        # Find videos with highest engagement
-        videos_with_views = [v for v in scrape_record['videos'] if v.get('views')]
-        if videos_with_views:
-            sorted_videos = sorted(
-                videos_with_views,
-                key=lambda x: self.parse_metric(x.get('views', '0')),
-                reverse=True
-            )[:3]
+        if latest_announcement:
+            latest_date_obj = latest_announcement.get("date")
+            if isinstance(latest_date_obj, datetime):
+                local_date = utc_to_local(latest_date_obj)
+                latest_date = local_date.strftime("%Y-%m-%d %I:%M %p")
+                sort_date = latest_date_obj  # Use original datetime for sorting
+            else:
+                latest_date = "No Date"
+                sort_date = datetime.min.replace(tzinfo=timezone.utc)
             
-            print("   Top videos by views:")
-            for video in sorted_videos:
-                desc = video.get('description', '')[:40]
-                print(f"   - {desc}...")
-                print(f"     Views: {video.get('views')}, Likes: {video.get('likes')}")
-    
-    def parse_metric(self, metric_str):
-        """Convert metric strings to numbers"""
-        if not metric_str:
-            return 0
-        
-        metric_str = str(metric_str).strip()
-        multipliers = {'K': 1000, 'M': 1000000, 'B': 1000000000}
-        
-        for suffix, multiplier in multipliers.items():
-            if suffix in metric_str.upper():
-                try:
-                    number = float(re.sub(r'[^0-9.]', '', metric_str.replace(suffix, '')))
-                    return int(number * multiplier)
-                except:
-                    return 0
+            latest_title = latest_announcement.get("title", "No Title")
+            latest_url = latest_announcement.get("url", "")
+        else:
+            latest_date = "No Recent Announcements"
+            latest_title = ""
+            latest_url = ""
+            sort_date = datetime.min.replace(tzinfo=timezone.utc)
         
         # Add data to the list
         schools_data.append({
@@ -962,8 +877,25 @@ def main():
     
     st.title("Campus Announcements [DRAFT]")
     st.markdown("Announcements from the provosts' and presidents' offices at select universities.")
+    
     try:
-        return int(re.sub(r'[^0-9]', '', metric_str))
-    except:
-        return 0
+        db = get_db()
+        
+        # Create tabs for different views
+        tab1, tab2, tab3 = st.tabs(["📢 Announcements", "🔗 Scraper Status", "🏫 Schools Summary"])
+        
+        with tab1:
+            display_announcements(db)
+        
+        with tab2:
+            display_scraper_status(db)
+        
+        with tab3:
+            display_schools_summary(db)
+            
+    except Exception as e:
+        st.error(f"Database connection error: {e}")
+        st.info("Please check your MongoDB connection settings.")
 
+if __name__ == "__main__":
+    main()
