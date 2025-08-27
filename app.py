@@ -65,10 +65,18 @@ def get_filtered_count_cached(query_str):
     try:
         db = get_db()
         query = eval(query_str)  # Convert string back to dict for caching
+        
+        # Fix datetime timezone issues in query
+        if "date" in query and "$gte" in query["date"]:
+            date_filter = query["date"]["$gte"]
+            if hasattr(date_filter, 'tzinfo'):
+                if date_filter.tzinfo is None:
+                    query["date"]["$gte"] = date_filter.replace(tzinfo=timezone.utc)
+        
         # Use countDocuments with a timeout for faster zero-result responses
         return db.articles.count_documents(query, maxTimeMS=3000)
     except Exception as e:
-        st.error(f"Error counting documents: {e}")
+        print(f"Error counting documents: {e}")  # Log to console instead of streamlit
         return 0
 
 def get_filtered_count(db, query):
@@ -241,6 +249,13 @@ def get_paginated_announcements(query_str, page, page_size):
         query = eval(query_str)  # Convert string back to dict
         start_idx = page * page_size
         
+        # Fix datetime timezone issues in query
+        if "date" in query and "$gte" in query["date"]:
+            date_filter = query["date"]["$gte"]
+            if hasattr(date_filter, 'tzinfo'):
+                if date_filter.tzinfo is None:
+                    query["date"]["$gte"] = date_filter.replace(tzinfo=timezone.utc)
+        
         # Use MongoDB projection to only fetch needed fields for better performance
         projection = {
             "_id": 0,
@@ -257,7 +272,7 @@ def get_paginated_announcements(query_str, page, page_size):
         cursor = db.articles.find(query, projection).sort("date", -1).skip(start_idx).limit(page_size).max_time_ms(5000)
         return list(cursor)
     except Exception as e:
-        st.error(f"Error fetching announcements: {e}")
+        print(f"Error fetching announcements: {e}")  # Log to console instead
         return []
 
 def display_announcements(db):
@@ -348,7 +363,13 @@ def display_announcements(db):
         query["$or"] = filter_conditions
 
     # Add date filter for announcements after the start date
-    query["date"] = {"$gte": start_date}
+    # Ensure start_date is timezone-aware
+    if start_date.tzinfo is None:
+        start_date_aware = start_date.replace(tzinfo=timezone.utc)
+    else:
+        start_date_aware = start_date
+    
+    query["date"] = {"$gte": start_date_aware}
 
     # Add content search filter if search_term is provided
     if search_term.strip():
@@ -766,6 +787,12 @@ def get_schools_summary_data(mongo_uri, db_name, _organizations_data, start_date
     db = client[db_name]
     schools_data = []
     
+    # Ensure start_date is timezone-aware
+    if start_date.tzinfo is None:
+        start_date_aware = start_date.replace(tzinfo=timezone.utc)
+    else:
+        start_date_aware = start_date
+    
     for org in _organizations_data:
         school_name = org.get("name", "Unknown School")
         school_color = org.get("color", "#000000")
@@ -775,16 +802,24 @@ def get_schools_summary_data(mongo_uri, db_name, _organizations_data, start_date
         scraper_count = len(scrapers)
         
         # Count the number of announcements for this school since start_date
-        announcement_count = db.articles.count_documents({
-            "org": school_name,
-            "date": {"$gte": start_date}
-        })
+        try:
+            announcement_count = db.articles.count_documents({
+                "org": school_name,
+                "date": {"$gte": start_date_aware}
+            })
+        except Exception as e:
+            print(f"Error counting announcements for {school_name}: {e}")
+            announcement_count = 0
         
         # Get the most recent announcement for this school
-        latest_announcement = db.articles.find_one(
-            {"org": school_name, "date": {"$gte": start_date}},
-            sort=[("date", -1)]
-        )
+        try:
+            latest_announcement = db.articles.find_one(
+                {"org": school_name, "date": {"$gte": start_date_aware}},
+                sort=[("date", -1)]
+            )
+        except Exception as e:
+            print(f"Error getting latest announcement for {school_name}: {e}")
+            latest_announcement = None
         
         if latest_announcement:
             latest_date_obj = latest_announcement.get("date")
