@@ -29,7 +29,7 @@ SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL")
 start_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
 
 def utc_to_local(utc_dt):
-    """Function to convert UTC datetime to local time"""
+    """Function to convert UTC datetime to local time with robust timezone handling"""
     if utc_dt is None:
         return None
     if not isinstance(utc_dt, datetime):
@@ -40,9 +40,24 @@ def utc_to_local(utc_dt):
         utc_dt = utc_dt.replace(tzinfo=timezone.utc)
     
     # Convert to local timezone
-    local_tz = get_localzone()
-    local_dt = utc_dt.astimezone(local_tz)
-    return local_dt
+    try:
+        local_tz = get_localzone()
+        local_dt = utc_dt.astimezone(local_tz)
+        return local_dt
+    except Exception as e:
+        print(f"Error converting timezone: {e}")
+        # Fallback: return as UTC if conversion fails
+        return utc_dt if utc_dt.tzinfo else utc_dt.replace(tzinfo=timezone.utc)
+
+def ensure_timezone_aware(dt):
+    """Utility function to ensure datetime is timezone-aware (assumes UTC if naive)"""
+    if dt is None:
+        return None
+    if not isinstance(dt, datetime):
+        return dt
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
 
 @st.cache_resource
 def get_db():
@@ -174,6 +189,9 @@ def check_and_send_daily_report(db, _organizations_data):
         if last_report and last_report.get("date"):
             last_report_date = last_report["date"]
             if isinstance(last_report_date, datetime):
+                # Ensure timezone awareness before converting to date
+                if last_report_date.tzinfo is None:
+                    last_report_date = last_report_date.replace(tzinfo=timezone.utc)
                 last_report_date = last_report_date.date()
             elif isinstance(last_report_date, str):
                 last_report_date = datetime.fromisoformat(last_report_date).date()
@@ -234,7 +252,7 @@ def check_and_send_daily_report(db, _organizations_data):
 # PERFORMANCE OPTIMIZATION: Cache paginated data for 60 seconds
 @st.cache_data(ttl=60)
 def get_paginated_announcements(query_str, page, page_size):
-    """Get paginated announcements with caching"""
+    """Get paginated announcements with caching and robust timezone handling"""
     try:
         db = get_db()
         query = eval(query_str)
@@ -252,7 +270,14 @@ def get_paginated_announcements(query_str, page, page_size):
         }
         
         cursor = db.articles.find(query, projection).sort("date", -1).skip(start_idx).limit(page_size).max_time_ms(5000)
-        return list(cursor)
+        announcements = list(cursor)
+        
+        # Process announcements to ensure timezone consistency
+        for ann in announcements:
+            if 'date' in ann and ann['date']:
+                ann['date'] = ensure_timezone_aware(ann['date'])
+        
+        return announcements
     except Exception as e:
         print(f"Error fetching announcements: {e}")
         return []
@@ -419,13 +444,15 @@ def display_announcements(db):
     for ann in paged_announcements:
         title = ann.get("title", "No Title")
 
-        # Convert UTC date to local time and format it
+        # Convert UTC date to local time and format it with robust timezone handling
         date_value = ann.get("date")
         if isinstance(date_value, datetime):
+            # Ensure timezone awareness before conversion
+            date_value = ensure_timezone_aware(date_value)
             local_date = utc_to_local(date_value)
             date_str = local_date.strftime("%Y-%m-%d %I:%M:%S %p")
         else:
-            date_str = str(date_value)
+            date_str = str(date_value) if date_value else "No Date"
 
         # OPTIMIZED: Get school info and scraper type using cached mapping
         scraper_path = ann.get("scraper", "")
@@ -794,6 +821,9 @@ def get_schools_summary_data(mongo_uri, db_name, _organizations_data, start_date
         if latest_announcement:
             latest_date_obj = latest_announcement.get("date")
             if isinstance(latest_date_obj, datetime):
+                # Ensure timezone awareness before processing
+                if latest_date_obj.tzinfo is None:
+                    latest_date_obj = latest_date_obj.replace(tzinfo=timezone.utc)
                 local_date = utc_to_local(latest_date_obj)
                 latest_date = local_date.strftime("%Y-%m-%d %I:%M %p")
                 sort_date = latest_date_obj
@@ -887,21 +917,48 @@ def main():
     try:
         db = get_db()
         
+        # Test database connection with a simple query
+        try:
+            # Try a simple count query to test the database
+            test_count = db.articles.count_documents({})
+            print(f"Database connection successful. Total articles: {test_count}")
+        except Exception as db_test_error:
+            st.error(f"Database query error: {db_test_error}")
+            st.info("The database connection was established but queries are failing.")
+            return
+        
         # Create tabs for different views
         tab1, tab2, tab3 = st.tabs(["📢 Announcements", "🔗 Scraper Status", "🏫 Schools Summary"])
         
         with tab1:
-            display_announcements(db)
+            try:
+                display_announcements(db)
+            except Exception as tab1_error:
+                st.error(f"Error in announcements tab: {tab1_error}")
+                print(f"Announcements tab error: {tab1_error}")
+                import traceback
+                traceback.print_exc()
         
         with tab2:
-            display_scraper_status(db)
+            try:
+                display_scraper_status(db)
+            except Exception as tab2_error:
+                st.error(f"Error in scraper status tab: {tab2_error}")
+                print(f"Scraper status tab error: {tab2_error}")
         
         with tab3:
-            display_schools_summary(db)
+            try:
+                display_schools_summary(db)
+            except Exception as tab3_error:
+                st.error(f"Error in schools summary tab: {tab3_error}")
+                print(f"Schools summary tab error: {tab3_error}")
             
     except Exception as e:
         st.error(f"Database connection error: {e}")
         st.info("Please check your MongoDB connection settings.")
+        print(f"Main function error: {e}")
+        import traceback
+        traceback.print_exc()
 
 if __name__ == "__main__":
     main()
