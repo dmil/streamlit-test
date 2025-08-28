@@ -370,7 +370,14 @@ def display_announcements(db):
         query["$or"] = filter_conditions
 
     # Add date filter for announcements after the start date
-    query["date"] = {"$gte": start_date}
+    # FIXED: Handle mixed date types (strings vs datetime objects)
+    query["date"] = {
+        "$gte": start_date, 
+        "$ne": "",           # Exclude empty strings
+        "$ne": None,         # Exclude null values
+        "$exists": True,     # Must have date field
+        "$type": "date"      # Only match actual datetime objects
+    }
 
     # Add content search filter if search_term is provided
     if search_term.strip():
