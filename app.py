@@ -125,6 +125,164 @@ def get_scraper_paths_by_type(_organizations_data, scraper_type):
                     matching_paths.append(path)
     return matching_paths
 
+def send_slack_notification(failed_scrapers, daily_stats=None):
+    """Send comprehensive Slack notification for scraper health and daily overview"""
+    if not SLACK_WEBHOOK_URL:
+        return False
+    
+    # Build comprehensive daily report message
+    message = "📊 **Daily Campus Scraper Report**\n\n"
+    
+    # Daily stats overview
+    if daily_stats:
+        message += f"**📈 Today's Activity:**\n"
+        message += f"• New announcements: {daily_stats['new_announcements']}\n"
+        message += f"• Schools with updates: {daily_stats['active_schools']}\n"
+        message += f"• Total announcements in system: {daily_stats['total_announcements']:,}\n\n"
+        
+        if daily_stats['top_schools']:
+            message += f"**🏆 Most Active Schools Today:**\n"
+            for school, count in daily_stats['top_schools'][:3]:
+                message += f"• {school}: {count} new announcements\n"
+            message += "\n"
+    
+    # Health status
+    if failed_scrapers:
+        message += f"**🚨 BROKEN SCRAPERS ({len(failed_scrapers)} need fixing):**\n"
+        for scraper in failed_scrapers:
+            message += f"• {scraper['School']} - {scraper['Name']}\n"
+            message += f"  ❌ {scraper['Health Reason']}\n"
+        message += "\n"
+    else:
+        message += "**✅ All scrapers healthy!**\n\n"
+    
+    message += f"View dashboard: https://campusdata.onrender.com/"
+    
+    payload = {
+        "text": message,
+        "username": "Campus Scraper Monitor",
+        "icon_emoji": ":clipboard:"
+    }
+    
+    try:
+        response = requests.post(SLACK_WEBHOOK_URL, json=payload, timeout=10)
+        return response.status_code == 200
+    except Exception as e:
+        print(f"Error sending Slack notification: {e}")
+        return False
+
+def get_daily_stats(db):
+    """Get daily statistics for Slack notification"""
+    try:
+        now = datetime.now()
+        today_start = datetime(now.year, now.month, now.day)
+        
+        # Get new announcements today
+        new_announcements = db.articles.count_documents({
+            "date": {"$gte": today_start}
+        })
+        
+        # Get total announcements
+        total_announcements = db.articles.count_documents({})
+        
+        # Get schools with updates today
+        pipeline = [
+            {"$match": {"date": {"$gte": today_start}}},
+            {"$group": {"_id": "$org", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}}
+        ]
+        
+        school_updates = list(db.articles.aggregate(pipeline))
+        active_schools = len(school_updates)
+        top_schools = [(item["_id"], item["count"]) for item in school_updates]
+        
+        return {
+            "new_announcements": new_announcements,
+            "active_schools": active_schools,
+            "total_announcements": total_announcements,
+            "top_schools": top_schools
+        }
+    except Exception as e:
+        print(f"Error getting daily stats: {e}")
+        return None
+
+def check_scraper_health():
+    """Check scraper health and send daily notification if needed"""
+    try:
+        db = get_db()
+        organizations_data = get_organizations_data(MONGO_URI, DB_NAME)
+        
+        # Check if we've already sent a report today
+        today = datetime.now().date()
+        
+        try:
+            last_report = db.slack_reports.find_one({"type": "daily_report"})
+            if last_report and last_report.get("date"):
+                last_report_date = last_report["date"]
+                if isinstance(last_report_date, datetime):
+                    if last_report_date.tzinfo is None:
+                        last_report_date = last_report_date.replace(tzinfo=timezone.utc)
+                    last_report_date = last_report_date.date()
+                elif isinstance(last_report_date, str):
+                    last_report_date = datetime.fromisoformat(last_report_date).date()
+                
+                # If we already sent a report today, skip
+                if last_report_date >= today:
+                    return False, "Already sent today"
+        except Exception as e:
+            print(f"Error checking last report date: {e}")
+        
+        # Get failed scrapers
+        failed_scrapers = []
+        current_time = datetime.now(timezone.utc)
+        
+        for org in organizations_data:
+            school_name = org.get("name", "Unknown School")
+            scrapers = org.get("scrapers", [])
+            
+            for scraper in scrapers:
+                last_run = scraper.get("last_run")
+                if last_run and isinstance(last_run, datetime):
+                    if last_run.tzinfo is None:
+                        last_run = last_run.replace(tzinfo=timezone.utc)
+                    
+                    hours_since_run = (current_time - last_run).total_seconds() / 3600
+                    
+                    # Consider broken if not run in 25+ hours (allows for some delay)
+                    if hours_since_run > 25:
+                        failed_scrapers.append({
+                            "School": school_name,
+                            "Name": scraper.get("name", "").replace(" announcements", ""),
+                            "Health Reason": f"Last run {int(hours_since_run)}h ago"
+                        })
+                else:
+                    failed_scrapers.append({
+                        "School": school_name,
+                        "Name": scraper.get("name", "").replace(" announcements", ""),
+                        "Health Reason": "No run data available"
+                    })
+        
+        # Get daily stats
+        daily_stats = get_daily_stats(db)
+        
+        # Send notification
+        success = send_slack_notification(failed_scrapers, daily_stats)
+        
+        if success:
+            # Update the tracking record
+            db.slack_reports.update_one(
+                {"type": "daily_report"},
+                {"$set": {"date": today, "sent_at": datetime.now(timezone.utc)}},
+                upsert=True
+            )
+            return True, f"Daily report sent: {len(failed_scrapers)} broken scrapers"
+        else:
+            return False, "Failed to send daily report"
+            
+    except Exception as e:
+        print(f"Error in health check: {e}")
+        return False, str(e)
+
 def get_paginated_announcements(query_dict, page, page_size):
     """Get paginated announcements"""
     try:
@@ -195,6 +353,313 @@ def convert_to_csv(announcements, scraper_mapping):
     csv_buffer = io.StringIO()
     df.to_csv(csv_buffer, index=False)
     return csv_buffer.getvalue()
+
+def display_dashboard_tab(db):
+    """Comprehensive dashboard with stats and insights"""
+    st.markdown("### 📊 Campus Announcements Dashboard")
+    
+    organizations_data = get_organizations_data(MONGO_URI, DB_NAME)
+    
+    # === KEY METRICS ROW ===
+    col1, col2, col3, col4 = st.columns(4)
+    
+    # Basic counts
+    total_orgs = len(organizations_data)
+    total_announcements = db.articles.count_documents({"date": {"$gte": start_date}})
+    
+    # Health metrics
+    current_time = datetime.now(timezone.utc)
+    broken_scrapers = 0
+    total_scrapers = 0
+    for org in organizations_data:
+        for scraper in org.get("scrapers", []):
+            total_scrapers += 1
+            last_run = scraper.get("last_run")
+            if last_run and isinstance(last_run, datetime):
+                if last_run.tzinfo is None:
+                    last_run = last_run.replace(tzinfo=timezone.utc)
+                hours_since_run = (current_time - last_run).total_seconds() / 3600
+                if hours_since_run > 25:
+                    broken_scrapers += 1
+            else:
+                broken_scrapers += 1
+    
+    # Today's activity
+    today = datetime.now()
+    today_start = datetime(today.year, today.month, today.day)
+    schools_updated_today = len(db.articles.distinct("org", {"date": {"$gte": today_start}}))
+    announcements_today = db.articles.count_documents({"date": {"$gte": today_start}})
+    
+    with col1:
+        st.metric("Total Schools", total_orgs)
+    with col2:
+        st.metric("Total Announcements", f"{total_announcements:,}")
+    with col3:
+        st.metric("Schools Active Today", f"{schools_updated_today}/{total_orgs}")
+    with col4:
+        health_color = "🟢" if broken_scrapers == 0 else "🔴"
+        healthy_scrapers = total_scrapers - broken_scrapers
+        st.metric(f"{health_color} System Health", f"{healthy_scrapers}/{total_scrapers} OK")
+    
+    # === RECENT ACTIVITY ===
+    st.markdown("### 📈 Recent Activity")
+    
+    activity_col1, activity_col2 = st.columns(2)
+    
+    with activity_col1:
+        st.markdown("**📅 Last 7 Days**")
+        week_ago = datetime.now() - timedelta(days=7)
+        daily_counts = []
+        
+        for i in range(7):
+            day = week_ago + timedelta(days=i)
+            day_start = datetime(day.year, day.month, day.day)
+            day_end = day_start + timedelta(days=1)
+            
+            count = db.articles.count_documents({
+                "date": {"$gte": day_start, "$lt": day_end}
+            })
+            daily_counts.append({
+                "Date": day.strftime("%m/%d"),
+                "Announcements": count
+            })
+        
+        if daily_counts:
+            daily_df = pd.DataFrame(daily_counts)
+            st.dataframe(daily_df, hide_index=True, use_container_width=True)
+    
+    with activity_col2:
+        st.markdown("**🏆 Most Active Schools (30 days)**")
+        month_ago = datetime.now() - timedelta(days=30)
+        
+        pipeline = [
+            {"$match": {"date": {"$gte": month_ago}}},
+            {"$group": {"_id": "$org", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 5}
+        ]
+        
+        top_schools = list(db.articles.aggregate(pipeline))
+        
+        if top_schools:
+            school_data = [{"School": item["_id"], "Count": item["count"]} for item in top_schools]
+            schools_df = pd.DataFrame(school_data)
+            st.dataframe(schools_df, hide_index=True, use_container_width=True)
+        else:
+            st.info("No recent activity")
+    
+    # === CONTENT INSIGHTS ===
+    st.markdown("### 🔍 Content Categories")
+    
+    categories = [
+        ("government_related", "Government Related", "🏛️"),
+        ("lawsuit_related", "Lawsuit Related", "⚖️"), 
+        ("funding_related", "Funding Related", "💰"),
+        ("protest_related", "Protest Related", "📢"),
+        ("layoff_related", "Layoff Related", "📉"),
+        ("trump_related", "Trump Related", "🇺🇸")
+    ]
+    
+    # Create two columns for categories
+    cat_col1, cat_col2 = st.columns(2)
+    
+    category_data = []
+    for field, display_name, emoji in categories:
+        count = db.articles.count_documents({
+            f"llm_response.{field}.related": True,
+            "date": {"$gte": start_date}
+        })
+        category_data.append({
+            "Category": f"{emoji} {display_name}",
+            "Count": count,
+            "% of Total": f"{(count/total_announcements*100):.1f}%" if total_announcements > 0 else "0%"
+        })
+    
+    with cat_col1:
+        if category_data:
+            # First 3 categories
+            cat_df1 = pd.DataFrame(category_data[:3])
+            st.dataframe(cat_df1, hide_index=True, use_container_width=True)
+    
+    with cat_col2:
+        if category_data:
+            # Last 3 categories
+            cat_df2 = pd.DataFrame(category_data[3:])
+            st.dataframe(cat_df2, hide_index=True, use_container_width=True)
+    
+
+
+def display_system_health_tab(db):
+    """Combined scraper and school health monitoring"""
+    st.markdown("### 🔧 System Health")
+    
+    organizations_data = get_organizations_data(MONGO_URI, DB_NAME)
+    
+    if not organizations_data:
+        st.warning("No schools found in the database.")
+        return
+    
+    # === HEALTH OVERVIEW ===
+    current_time = datetime.now(timezone.utc)
+    
+    health_stats = {
+        "healthy_scrapers": 0,
+        "broken_scrapers": 0,
+        "recent_schools": 0,
+        "quiet_schools": 0,
+        "stale_schools": 0,
+        "no_posts_schools": 0
+    }
+    
+    detailed_data = []
+    
+    for org in organizations_data:
+        school_name = org.get("name", "Unknown School")
+        scrapers = org.get("scrapers", [])
+        
+        # Check scraper health
+        scraper_health_status = "✅ Healthy"
+        broken_scraper_details = []
+        
+        for scraper in scrapers:
+            last_run = scraper.get("last_run")
+            scraper_name = scraper.get("name", "Unknown")
+            
+            if last_run and isinstance(last_run, datetime):
+                if last_run.tzinfo is None:
+                    last_run = last_run.replace(tzinfo=timezone.utc)
+                hours_since_run = (current_time - last_run).total_seconds() / 3600
+                
+                if hours_since_run > 25:
+                    broken_scraper_details.append(f"{scraper_name} ({int(hours_since_run)}h)")
+                    health_stats["broken_scrapers"] += 1
+                else:
+                    health_stats["healthy_scrapers"] += 1
+            else:
+                broken_scraper_details.append(f"{scraper_name} (no data)")
+                health_stats["broken_scrapers"] += 1
+        
+        if broken_scraper_details:
+            scraper_health_status = f"❌ Broken: {', '.join(broken_scraper_details)}"
+        
+        # Check content freshness
+        try:
+            latest_announcement = db.articles.find_one(
+                {"org": school_name},
+                sort=[("date", -1)]
+            )
+        except:
+            latest_announcement = None
+        
+        if latest_announcement:
+            latest_date_obj = latest_announcement.get("date")
+            if isinstance(latest_date_obj, datetime):
+                if latest_date_obj.tzinfo is None:
+                    latest_date_obj = latest_date_obj.replace(tzinfo=timezone.utc)
+                
+                days_since_post = (current_time - latest_date_obj).total_seconds() / 86400
+                
+                if days_since_post <= 3:
+                    content_status = "🟢 Recent"
+                    health_stats["recent_schools"] += 1
+                elif days_since_post <= 7:
+                    content_status = "🟡 Quiet"
+                    health_stats["quiet_schools"] += 1
+                else:
+                    content_status = "🔴 Stale"
+                    health_stats["stale_schools"] += 1
+                
+                local_date = utc_to_local(latest_date_obj)
+                latest_date = local_date.strftime("%Y-%m-%d %I:%M %p")
+                latest_title = latest_announcement.get("title", "No Title")[:50] + "..."
+            else:
+                content_status = "❓ Unknown"
+                latest_date = "No Date"
+                latest_title = ""
+        else:
+            content_status = "⚫ No Posts"
+            health_stats["no_posts_schools"] += 1
+            latest_date = "No Recent Announcements"
+            latest_title = ""
+        
+        # Count total announcements
+        try:
+            announcement_count = db.articles.count_documents({
+                "org": school_name,
+                "date": {"$gte": start_date}
+            })
+        except:
+            announcement_count = 0
+        
+        detailed_data.append({
+            "School": school_name,
+            "Scraper Health": scraper_health_status,
+            "Content Status": content_status,
+            "Total Posts": announcement_count,
+            "Latest Date": latest_date,
+            "Latest Title": latest_title
+        })
+    
+    # === SUMMARY METRICS ===
+    summary_col1, summary_col2, summary_col3, summary_col4 = st.columns(4)
+    
+    with summary_col1:
+        total_scrapers = health_stats["healthy_scrapers"] + health_stats["broken_scrapers"]
+        st.metric(
+            "Scrapers Health", 
+            f"{health_stats['healthy_scrapers']}/{total_scrapers}",
+            delta=f"{health_stats['broken_scrapers']} broken" if health_stats['broken_scrapers'] > 0 else "All healthy"
+        )
+    
+    with summary_col2:
+        st.metric(
+            "Recent Activity",
+            f"{health_stats['recent_schools']} schools",
+            help="Schools with posts in last 3 days"
+        )
+    
+    with summary_col3:
+        st.metric(
+            "Quiet Schools",
+            f"{health_stats['quiet_schools']}",
+            help="Schools with posts 4-7 days ago"
+        )
+    
+    with summary_col4:
+        problem_schools = health_stats['stale_schools'] + health_stats['no_posts_schools']
+        st.metric(
+            "Problem Schools",
+            f"{problem_schools}",
+            help="Schools with stale content or no posts"
+        )
+    
+    # === DETAILED TABLE ===
+    st.markdown("### 📋 Detailed Status")
+    
+    # Sort: Broken scrapers first, then by latest date
+    detailed_data.sort(key=lambda x: (0 if "Broken" in x["Scraper Health"] else 1, x["Latest Date"]), reverse=True)
+    
+    # Create display DataFrame
+    display_df = pd.DataFrame(detailed_data)
+    
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        height=600,
+        column_config={
+            "Latest Title": st.column_config.TextColumn(
+                "Latest Title",
+                width="large"
+            ),
+            "Scraper Health": st.column_config.TextColumn(
+                "Scraper Health",
+                width="large"
+            )
+        }
+    )
+    
+
 
 def display_announcements(db):
     """Display the announcements view"""
@@ -449,152 +914,11 @@ def display_announcements(db):
                     st.session_state["ann_page"] += 1
                     st.rerun()
 
-def display_scraper_status(db):
-    """Display the scraper status tab"""
-    st.markdown("### URLs")
-    
-    organizations_data = get_organizations_data(MONGO_URI, DB_NAME)
-    
-    if not organizations_data:
-        st.warning("No scraper information found in the database.")
-        return
-    
-    all_scrapers_data = []
-    
-    for org in organizations_data:
-        school_name = org.get("name", "Unknown School")
-        scrapers = org.get("scrapers", [])
-        
-        for scraper in scrapers:
-            last_run = scraper.get("last_run")
-            if isinstance(last_run, datetime):
-                local_last_run = utc_to_local(last_run)
-                last_run_str = local_last_run.strftime("%Y-%m-%d %I:%M:%S %p")
-            else:
-                last_run_str = "" if last_run is None else str(last_run)
-            
-            all_scrapers_data.append({
-                "School": school_name,
-                "Name": scraper.get("name", "").replace(" announcements", ""),
-                "URL": scraper.get("url", "No URL"),
-                "Last Run": last_run_str
-            })
-    
-    df = pd.DataFrame(all_scrapers_data)
-    st.dataframe(
-        df,
-        use_container_width=True,
-        hide_index=True,
-        height=600,
-        column_config={
-            "URL": st.column_config.LinkColumn(
-                "URL",
-                help="Source URL for the scraper",
-                display_text="Link"
-            )
-        }
-    )
-
-def display_schools_summary(db):
-    """Display a summary table of all schools"""
-    st.markdown("### Schools Summary")
-    
-    organizations_data = get_organizations_data(MONGO_URI, DB_NAME)
-    
-    if not organizations_data:
-        st.warning("No schools found in the database.")
-        return
-    
-    schools_data = []
-    
-    for org in organizations_data:
-        school_name = org.get("name", "Unknown School")
-        
-        scrapers = org.get("scrapers", [])
-        scraper_count = len(scrapers)
-        
-        try:
-            announcement_count = db.articles.count_documents({
-                "org": school_name,
-                "date": {"$gte": start_date}
-            })
-        except Exception as e:
-            print(f"Error counting announcements for {school_name}: {e}")
-            announcement_count = 0
-        
-        try:
-            latest_announcement = db.articles.find_one(
-                {"org": school_name, "date": {"$gte": start_date}},
-                sort=[("date", -1)]
-            )
-        except Exception as e:
-            print(f"Error getting latest announcement for {school_name}: {e}")
-            latest_announcement = None
-        
-        if latest_announcement:
-            latest_date_obj = latest_announcement.get("date")
-            if isinstance(latest_date_obj, datetime):
-                if latest_date_obj.tzinfo is None:
-                    latest_date_obj = latest_date_obj.replace(tzinfo=timezone.utc)
-                local_date = utc_to_local(latest_date_obj)
-                latest_date = local_date.strftime("%Y-%m-%d %I:%M %p")
-                sort_date = latest_date_obj
-            else:
-                latest_date = "No Date"
-                sort_date = datetime.min.replace(tzinfo=timezone.utc)
-            
-            latest_title = latest_announcement.get("title", "No Title")
-            latest_url = latest_announcement.get("url", "")
-        else:
-            latest_date = "No Recent Announcements"
-            latest_title = ""
-            latest_url = ""
-            sort_date = datetime.min.replace(tzinfo=timezone.utc)
-        
-        schools_data.append({
-            "School": school_name,
-            "Scrapers": scraper_count,
-            "Announcements": announcement_count,
-            "Latest Date": latest_date,
-            "Sort Date": sort_date,
-            "Latest Title": latest_title,
-            "URL": latest_url
-        })
-    
-    df = pd.DataFrame(schools_data)
-    df = df.sort_values(by="Sort Date", ascending=False)
-    
-    display_df = pd.DataFrame({
-        "School": [school["School"] for school in df.to_dict('records')],
-        "Scrapers": [school["Scrapers"] for school in df.to_dict('records')],
-        "Announcements": [school["Announcements"] for school in df.to_dict('records')],
-        "Latest Date": [school["Latest Date"] for school in df.to_dict('records')],
-        "Latest Title": [school["Latest Title"] for school in df.to_dict('records')],
-        "URL": [school["URL"] for school in df.to_dict('records')]
-    })
-
-    st.write(f"Total schools: **{len(organizations_data)}**")
-    st.write(f"Total announcements (since {start_date.strftime('%B %d, %Y')}): **{df['Announcements'].sum():,}**")
-    
-    st.dataframe(
-        display_df,
-        use_container_width=True,
-        hide_index=True,
-        height=600,
-        column_config={
-            "URL": st.column_config.LinkColumn(
-                "URL", 
-                help="Link to the most recent announcement.", 
-                display_text="Link"
-            )
-        }
-    )
-
 def main():
     st.set_page_config(
         page_title="Campus Announcements Tracker [DRAFT]",
         page_icon="🎓",
-        layout="centered",
+        layout="wide",  # Changed to wide for better dashboard layout
         initial_sidebar_state="expanded",
         menu_items={"About": "This is a draft version of the Campus Announcements Tracker."}
     )
@@ -605,41 +929,37 @@ def main():
     try:
         db = get_db()
         
+        # Test database connection
         try:
             test_count = db.articles.count_documents({})
             print(f"Database connection successful. Total articles: {test_count}")
         except Exception as db_test_error:
             st.error(f"Database query error: {db_test_error}")
-            st.info("The database connection was established but queries are failing.")
             return
         
-        tab1, tab2, tab3 = st.tabs(["Announcements", "Scraper Status", "Schools Summary"])
+        # Create three streamlined tabs
+        tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "📋 Announcements", "🔧 System Health"])
         
         with tab1:
             try:
-                display_announcements(db)
-            except Exception as tab1_error:
-                st.error(f"Error in announcements tab: {tab1_error}")
-                print(f"Announcements tab error: {tab1_error}")
+                display_dashboard_tab(db)
+            except Exception as e:
+                st.error(f"Error in dashboard: {e}")
         
         with tab2:
             try:
-                display_scraper_status(db)
-            except Exception as tab2_error:
-                st.error(f"Error in scraper status tab: {tab2_error}")
-                print(f"Scraper status tab error: {tab2_error}")
+                display_announcements(db)
+            except Exception as e:
+                st.error(f"Error in announcements: {e}")
         
         with tab3:
             try:
-                display_schools_summary(db)
-            except Exception as tab3_error:
-                st.error(f"Error in schools summary tab: {tab3_error}")
-                print(f"Schools summary tab error: {tab3_error}")
+                display_system_health_tab(db)
+            except Exception as e:
+                st.error(f"Error in system health: {e}")
             
     except Exception as e:
         st.error(f"Database connection error: {e}")
-        st.info("Please check your MongoDB connection settings.")
-        print(f"Main function error: {e}")
 
 if __name__ == "__main__":
     main()
