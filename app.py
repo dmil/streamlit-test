@@ -207,7 +207,7 @@ def get_daily_stats(db):
         return None
 
 def check_scraper_health():
-    """Check scraper health and send daily notification if needed"""
+    """Check and send daily notification if needed"""
     try:
         db = get_db()
         organizations_data = get_organizations_data(MONGO_URI, DB_NAME)
@@ -255,12 +255,7 @@ def check_scraper_health():
                             "Name": scraper.get("name", "").replace(" announcements", ""),
                             "Health Reason": f"Last run {int(hours_since_run)}h ago"
                         })
-                else:
-                    failed_scrapers.append({
-                        "School": school_name,
-                        "Name": scraper.get("name", "").replace(" announcements", ""),
-                        "Health Reason": "No run data available"
-                    })
+                # If no last_run data, don't automatically mark as broken
         
         # Get daily stats
         daily_stats = get_daily_stats(db)
@@ -381,8 +376,7 @@ def display_dashboard_tab(db):
                 hours_since_run = (current_time - last_run).total_seconds() / 3600
                 if hours_since_run > 25:
                     broken_scrapers += 1
-            else:
-                broken_scrapers += 1
+            # Don't count as broken if no last_run data
     
     # Today's activity
     today = datetime.now()
@@ -536,8 +530,8 @@ def display_system_health_tab(db):
                 else:
                     health_stats["healthy_scrapers"] += 1
             else:
-                broken_scraper_details.append(f"{scraper_name} (no data)")
-                health_stats["broken_scrapers"] += 1
+                # Don't count as broken if no last_run data - just mark as healthy
+                health_stats["healthy_scrapers"] += 1
         
         if broken_scraper_details:
             scraper_health_status = f"❌ Broken: {', '.join(broken_scraper_details)}"
