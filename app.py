@@ -2,6 +2,7 @@
 """
 Simple Streamlit front-end to display announcements from MongoDB.
 Shows title, school, date, URL, and source base URL for each announcement.
+UPDATED: School filter now includes scraper field in the search
 """
 
 import os
@@ -123,6 +124,19 @@ def get_scraper_paths_by_type(_organizations_data, scraper_type):
                 path = scraper.get("path")
                 if path:
                     matching_paths.append(path)
+    return matching_paths
+
+def get_scraper_paths_by_school(_organizations_data, school_name):
+    """Get all scraper paths that belong to a specific school"""
+    matching_paths = []
+    for org in _organizations_data:
+        if org.get("name") == school_name:
+            scrapers = org.get("scrapers", [])
+            for scraper in scrapers:
+                path = scraper.get("path")
+                if path:
+                    matching_paths.append(path)
+            break  # Found the school, no need to continue
     return matching_paths
 
 def send_slack_notification(failed_scrapers, daily_stats=None):
@@ -430,14 +444,16 @@ def display_dashboard_tab(db):
             {"$match": {"date": {"$gte": month_ago}}},
             {"$group": {"_id": "$org", "count": {"$sum": 1}}},
             {"$sort": {"count": -1}},
-            {"$limit": 5}
+            {"$limit": 10}
         ]
         
         top_schools = list(db.articles.aggregate(pipeline))
         
         if top_schools:
-            school_data = [{"School": item["_id"], "Count": item["count"]} for item in top_schools]
-            schools_df = pd.DataFrame(school_data)
+            schools_df = pd.DataFrame([
+                {"School": item["_id"], "Posts": item["count"]} 
+                for item in top_schools
+            ])
             st.dataframe(schools_df, hide_index=True, use_container_width=True)
         else:
             st.info("No recent activity")
@@ -656,7 +672,7 @@ def display_system_health_tab(db):
 
 
 def display_announcements(db):
-    """Display the announcements view"""
+    """Display the announcements view - UPDATED with scraper field filtering"""
     st.markdown('Please note that this is an unedited **first draft** proof-of-concept. Classifications **WILL BE** inaccurate.')
 
     organizations_data = get_organizations_data(MONGO_URI, DB_NAME)
@@ -705,13 +721,34 @@ def display_announcements(db):
         selected_scraper_type = st.selectbox("Filter by Announcement Type", scraper_type_options)
 
     query = {}
+    
+    # UPDATED: Filter by school using both 'org' field AND 'scraper' field
     if selected_school != "All":
-        query["org"] = selected_school
+        # Get all scraper paths for this school
+        school_scraper_paths = get_scraper_paths_by_school(organizations_data, selected_school)
+        
+        # Use $or to match either the org field OR the scraper field
+        if school_scraper_paths:
+            query["$and"] = [
+                {
+                    "$or": [
+                        {"org": selected_school},
+                        {"scraper": {"$in": school_scraper_paths}}
+                    ]
+                }
+            ]
+        else:
+            # Fallback to just org if no scrapers found
+            query["org"] = selected_school
 
     if selected_scraper_type != "All":
         matching_paths = get_scraper_paths_by_type(organizations_data, selected_scraper_type)
         if matching_paths:
-            query["scraper"] = {"$in": matching_paths}
+            # If we already have $and from school filter, append to it
+            if "$and" in query:
+                query["$and"].append({"scraper": {"$in": matching_paths}})
+            else:
+                query["scraper"] = {"$in": matching_paths}
 
     filter_conditions = []
     if show_govt_related:
@@ -728,16 +765,32 @@ def display_announcements(db):
         filter_conditions.append({"llm_response.trump_related.related": True})
 
     if filter_conditions:
-        query["$or"] = filter_conditions
+        # If we already have $and from filters above, append to it
+        if "$and" in query:
+            query["$and"].append({"$or": filter_conditions})
+        else:
+            query["$or"] = filter_conditions
 
-    query["date"] = {
+    # Date filter
+    date_filter = {
         "$gte": start_date,
         "$exists": True,
         "$ne": None
     }
+    
+    # Add date filter to $and if it exists, otherwise add directly
+    if "$and" in query:
+        query["$and"].append({"date": date_filter})
+    else:
+        query["date"] = date_filter
 
     if search_term.strip():
-        query["content"] = {"$regex": search_term, "$options": "i"}
+        # Add search filter to $and if it exists, otherwise add directly
+        search_filter = {"content": {"$regex": search_term, "$options": "i"}}
+        if "$and" in query:
+            query["$and"].append(search_filter)
+        else:
+            query["content"] = search_filter
 
     with st.spinner("Counting results..."):
         num_announcements = get_filtered_count(query)
@@ -820,6 +873,7 @@ def display_announcements(db):
         <p style="margin-bottom: 0.5em;">
             <strong>School:</strong> <span style="background-color:{school_color}; padding:2px 4px; border-radius:4px; color:#ffffff;">{school_name}</span><br>
             <strong>Type:</strong> {scraper_type_display}<br>
+            <strong>Scraper:</strong> {scraper_path}<br>
             <strong>Date:</strong> {date_str}<br>
             <strong>Content Scraped:</strong> {'✅' if content else '👎'}<br>
             <strong>Announcement URL:</strong><br/> <a href="{url}">{url}</a>
