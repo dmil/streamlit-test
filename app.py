@@ -720,6 +720,51 @@ def display_announcements(db):
         scraper_type_options = ["All"] + scraper_types
         selected_scraper_type = st.selectbox("Filter by Announcement Type", scraper_type_options)
 
+    # NEW: Filter by specific scraper path(s), but narrow options if a school is selected
+    def get_scraper_url_by_path(orgs_data, path):
+        for org in orgs_data:
+            for scraper in org.get("scrapers", []):
+                if scraper.get("path") == path:
+                    return scraper.get("url", "")
+        return ""
+
+    if selected_school != "All":
+        # Only show scrapers for the selected school
+        school_scraper_paths = get_scraper_paths_by_school(organizations_data, selected_school)
+        scraper_items = sorted(
+            [
+                (
+                    path,
+                    f"{scraper_mapping[path]['org_name']} — {scraper_mapping[path]['name'] or 'Unknown'} ({path})"
+                    + (f" [{get_scraper_url_by_path(organizations_data, path)}]" if get_scraper_url_by_path(organizations_data, path) else "")
+                )
+                for path in school_scraper_paths if path in scraper_mapping
+            ],
+            key=lambda x: x[1].lower()
+        )
+    else:
+        # Show all scrapers
+        scraper_items = sorted(
+            [
+                (
+                    path,
+                    f"{info['org_name']} — {info['name'] or 'Unknown'} ({path})"
+                    + (f" [{get_scraper_url_by_path(organizations_data, path)}]" if get_scraper_url_by_path(organizations_data, path) else "")
+                )
+                for path, info in scraper_mapping.items()
+            ],
+            key=lambda x: x[1].lower()
+        )
+
+    scraper_labels = [label for _, label in scraper_items]
+    label_to_path = {label: path for path, label in scraper_items}
+    selected_scraper_labels = st.multiselect(
+        "Filter by Scraper (path)",
+        options=scraper_labels,
+        key="selected_scraper_paths"
+    )
+    selected_scraper_paths = [label_to_path[lbl] for lbl in selected_scraper_labels]
+
     query = {}
     
     # UPDATED: Filter by school using both 'org' field AND 'scraper' field
@@ -749,6 +794,13 @@ def display_announcements(db):
                 query["$and"].append({"scraper": {"$in": matching_paths}})
             else:
                 query["scraper"] = {"$in": matching_paths}
+
+    # NEW: Apply scraper path multiselect (intersection with other filters)
+    if selected_scraper_paths:
+        if "$and" in query:
+            query["$and"].append({"scraper": {"$in": selected_scraper_paths}})
+        else:
+            query["scraper"] = {"$in": selected_scraper_paths}
 
     filter_conditions = []
     if show_govt_related:
@@ -800,7 +852,9 @@ def display_announcements(db):
     PAGE_SIZE = 20
     total_pages = max((num_announcements - 1) // PAGE_SIZE + 1, 1) if num_announcements > 0 else 1
     
-    filter_state_key = f"{selected_school}_{selected_scraper_type}_{show_govt_related}_{show_lawsuit_related}_{show_funding_related}_{show_protest_related}_{show_layoff_related}_{show_trump_related}_{search_term}"
+    # Include selected scraper paths in filter state key to reset pagination when changed
+    selected_scrapers_state = "|".join(selected_scraper_labels) if selected_scraper_labels else "ALL"
+    filter_state_key = f"{selected_school}_{selected_scraper_type}_{show_govt_related}_{show_lawsuit_related}_{show_funding_related}_{show_protest_related}_{show_layoff_related}_{show_trump_related}_{search_term}_{selected_scrapers_state}"
     
     if "last_filter_state" not in st.session_state:
         st.session_state["last_filter_state"] = filter_state_key
@@ -833,7 +887,7 @@ def display_announcements(db):
     with col_clear:
         if st.button("Clear All Filters"):
             for key in list(st.session_state.keys()):
-                if key.startswith(('show_', 'search_term', 'ann_page', 'last_filter_state')):
+                if key.startswith(('show_', 'search_term', 'ann_page', 'last_filter_state', 'selected_scraper_paths')):
                     del st.session_state[key]
             st.rerun()
 
